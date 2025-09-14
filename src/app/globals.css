@@ -1,0 +1,10 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: all;
+}
+
+@layer components {
+  /* Make single (non-join) buttons follow your token */
+  .btn:not(.join-item) { border-radius: var(--radius-field); }
+}
+
