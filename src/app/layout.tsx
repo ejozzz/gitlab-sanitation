@@ -1,29 +1,23 @@
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
-import './globals.css'
-import { Providers } from './providers'
-import Navigation from '@/components/Navigation'
+// app/layout.tsx  (no "use client", no useState)
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import { Providers } from './providers';
+import DrawerWrapper from '@/components/DrawerWrapper'; // <-- new
 
-const inter = Inter({ subsets: ['latin'] })
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'GitLab Sanitation Dashboard',
   description: 'DevOps tool for GitLab repository analysis and cleanup',
-}
+};
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.className}>
       <body>
         <Providers>
-          <div className="min-h-screen bg-base-200">
-            <Navigation />
-            <main>{children}</main>
-          </div>
+          <DrawerWrapper>{children}</DrawerWrapper>
         </Providers>
       </body>
     </html>

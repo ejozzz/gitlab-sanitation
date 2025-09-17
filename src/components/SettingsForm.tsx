@@ -6,6 +6,7 @@ import { settingsFormSchema, type SettingsFormData } from '@/lib/config';
 
 export default function SettingsForm() {
   const [formData, setFormData] = useState<SettingsFormData>({
+    name: '',         
     gitlabHost: '',
     projectId: '',
     gitlabToken: '',
@@ -26,12 +27,12 @@ export default function SettingsForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      
+
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || 'Validation failed');
       }
-      
+
       return response.json();
     },
   });
@@ -43,26 +44,26 @@ export default function SettingsForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data, save: true }),
       });
-      
+
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || 'Save failed');
       }
-      
+
       return response.json();
     },
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       // Validate first
       const validationResult = await validateMutation.mutateAsync(formData);
-      
+
       // Then save
       await saveMutation.mutateAsync(formData);
-      
+
       // Reset form with success
       setFormData({ ...formData, gitlabToken: '' });
     } catch (error) {
@@ -74,7 +75,7 @@ export default function SettingsForm() {
     <div className="card bg-base-100 shadow-xl">
       <div className="card-body">
         <h2 className="card-title">GitLab Configuration</h2>
-        
+
         {configStatus?.configured && (
           <div className="alert alert-info">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">

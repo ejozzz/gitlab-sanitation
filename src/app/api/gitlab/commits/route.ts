@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       throw new Error('Configuration error');
     }
 
-    const project = config.projects.find(p => p.id === projectId);
+    const project = config.projects.find(p => p.projectId === projectId);
     if (!project) {
       throw new Error(`Project with ID ${projectId} not found`);
     }

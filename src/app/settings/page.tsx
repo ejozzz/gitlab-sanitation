@@ -39,7 +39,7 @@ export default function SettingsPage() {
     queryKey: ['user-projects'],
     queryFn: async () => {
       if (!userData) return [];
-      const response = await fetch('/api/user/projects');
+      const response = await fetch('/api/projects');
       if (!response.ok) throw new Error('Failed to fetch projects');
       return response.json();
     },
@@ -50,7 +50,7 @@ export default function SettingsPage() {
     queryKey: ['user-active-project'],
     queryFn: async () => {
       if (!userData) return null;
-      const response = await fetch('/api/user/projects/active');
+      const response = await fetch('/api/projects/active');
       if (!response.ok) return null;
       return response.json();
     },
@@ -59,7 +59,7 @@ export default function SettingsPage() {
 
   const validateMutation = useMutation({
     mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/user/projects/validate', {
+      const response = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -76,7 +76,7 @@ export default function SettingsPage() {
 
   const saveMutation = useMutation({
     mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/user/projects', {
+      const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data, save: true }),
@@ -108,19 +108,25 @@ export default function SettingsPage() {
     }
   };
 
+  
+
   const handleSetActiveProject = async (projectId: string) => {
+    
     try {
-      const response = await fetch('/api/user/projects/active', {
+      console.log('execute /api/projects/active',JSON.stringify({ projectId }))
+      const response = await fetch('/api/projects/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId }),
       });
       
       if (response.ok) {
+        console.log('response okay')
         setActiveProject(projectId);
         queryClient.invalidateQueries({ queryKey: ['user-active-project'] });
       }
     } catch (error) {
+      console.log('response not okay')
       console.error('Failed to set active project:', error);
     }
   };

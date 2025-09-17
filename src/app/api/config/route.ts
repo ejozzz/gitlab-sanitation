@@ -1,68 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readConfig, getActiveProjectConfig } from '@/lib/config';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
+import db from '@/lib/db';
 
-const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
-const CONFIG_FILE = join(DATA_DIR, 'config.json');
-
+/* ----------  GET  ---------- */
 export async function GET() {
   try {
-    const config = await readConfig();
-    if (!config) {
-      return NextResponse.json({ configured: false, projects: [] });
-    }
+    const rows = db.prepare(
+      `SELECT id, name, gitlab_url, created_at, updated_at
+       FROM projects
+       ORDER BY created_at DESC`
+    ).all();
 
-    // Return config without sensitive data
     return NextResponse.json({
-      configured: true,
-      activeProjectId: config.activeProjectId,
-      projectCount: config.projects.length,
-      projects: config.projects.map(p => ({
-        id: p.id,
-        name: p.name,
-        gitlabHost: p.gitlabHost,
-        projectId: p.projectId,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
+      configured: rows.length > 0,
+      activeProjectId: rows[0]?.id ?? null,   // simplest: newest = active
+      projectCount: rows.length,
+      projects: rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        gitlabHost: r.gitlab_url.split('/api/v4/projects/')[0], // derive host
+        projectId: r.gitlab_url.split('/api/v4/projects/')[1],
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
       })),
-      updatedAt: config.updatedAt,
+      updatedAt: rows[0]?.updated_at ?? null,
     });
-  } catch (error) {
-    return NextResponse.json(
-      { error: 'Failed to read configuration' },
-      { status: 500 }
-    );
+  } catch (e: any) {
+    console.error('GET /api/config', e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
 
+/* ----------  POST  – switch active project ---------- */
 export async function POST(request: NextRequest) {
   try {
     const { activeProjectId } = await request.json();
-    console.log('=== CONFIG API - Setting active project ===', activeProjectId);
-    
-    const config = await readConfig();
-    if (!config) {
-      return NextResponse.json(
-        { error: 'No configuration found' },
-        { status: 404 }
-      );
-    }
 
-    // Update active project
-    config.activeProjectId = activeProjectId;
-    config.updatedAt = new Date().toISOString();
-
-    console.log('Updated config activeProjectId to:', config.activeProjectId);
-    
-    await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+    // We simply store the active-project id in a single-row table
+    db.prepare(
+      `INSERT OR REPLACE INTO config (key, value)
+       VALUES ('activeProjectId', @id)`
+    ).run({ id: String(activeProjectId) });
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Config API Error:', error);
-    return NextResponse.json(
-      { error: 'Failed to update configuration' },
-      { status: 500 }
-    );
+  } catch (e: any) {
+    console.error('POST /api/config', e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
