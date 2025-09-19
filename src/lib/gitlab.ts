@@ -76,6 +76,7 @@ export class GitLabAPIClient {
   private baseUrl: string;
   private token: string;
   private projectId: string | number;
+  
 
   constructor(baseUrl: string, token: string, projectId: string | number) {
     this.baseUrl = baseUrl.replace(/\/$/, '');

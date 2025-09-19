@@ -33,6 +33,7 @@ export const settingsFormSchema = z.object({
   gitlabHost: z.string().url(),
   projectId: z.union([z.string(), z.number()]),
   gitlabToken: z.string().min(1, 'Token is required'),
+  isActive: z.boolean().default(false),
 });
 
 export type SettingsFormData = z.infer<typeof settingsFormSchema>;

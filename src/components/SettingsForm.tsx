@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { settingsFormSchema, type SettingsFormData } from '@/lib/config';
+import { settingsFormSchema, type SettingsFormData } from '@/lib/config.shared';
 
 export default function SettingsForm() {
   const [formData, setFormData] = useState<SettingsFormData>({

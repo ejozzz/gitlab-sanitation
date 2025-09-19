@@ -1,328 +1,461 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
+import { settingsFormSchema, type SettingsFormData } from '@/lib/config.shared';
 import { useProjectStore } from '@/lib/project-store';
-import { settingsFormSchema, type SettingsFormData } from '@/lib/config';
-import { useRouter } from 'next/navigation';
 
+/* ---------- helpers ---------- */
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function validate(data: SettingsFormData): Partial<Record<keyof SettingsFormData, string>> {
+  const res = settingsFormSchema.safeParse(data);
+  if (res.success) return {};
+  const errs: Partial<Record<keyof SettingsFormData, string>> = {};
+  for (const e of res.error.issues) {
+    const key = e.path[0] as keyof SettingsFormData;
+    if (!errs[key]) errs[key] = e.message;
+  }
+  return errs;
+}
+
+function normalizeHost(raw: string) {
+  const t = raw.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  return t ? `https://${t}` : '';
+}
+
+function composeForm(fields: {
+  name: string;
+  hostInput: string;
+  projectId: string;
+  gitlabToken: string;
+}): SettingsFormData {
+  return {
+    name: fields.name,
+    projectId: fields.projectId,
+    gitlabToken: fields.gitlabToken,
+    gitlabHost: normalizeHost(fields.hostInput),
+  };
+}
+
+function shallowEqual(a: SettingsFormData, b: SettingsFormData) {
+  return (
+    a.name === b.name &&
+    a.gitlabHost === b.gitlabHost &&
+    String(a.projectId) === String(b.projectId) &&
+    a.gitlabToken === b.gitlabToken
+  );
+}
+
+/* ---------- main component ---------- */
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { setActiveProject } = useProjectStore();
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [formData, setFormData] = useState<SettingsFormData>({
-    name: '',
-    gitlabHost: '',
-    projectId: '',
-    gitlabToken: '',
-  });
+  const params = useSearchParams();
+  const firstTime = params?.get('firstTime') === 'true';
+  const { setActiveProject } = useProjectStore();
 
-  // Check authentication and get user data
-  const { data: userData, isLoading: authLoading } = useQuery({
-    queryKey: ['current-user'],
+  /* server data (fetched once) */
+  const { data: serverSettings, isLoading: isLoadingSettings } = useQuery({
+    queryKey: ['projects'],
     queryFn: async () => {
-      const response = await fetch('/api/auth/me');
-      if (!response.ok) {
-        if (response.status === 401) {
-          router.push('/login');
-          return null;
-        }
-        throw new Error('Failed to get user info');
+      const res = await fetch('/api/projects', { cache: 'no-store' });
+      if (!res.ok) {
+        if (res.status === 404)
+          return { name: '', gitlabHost: '', projectId: '', gitlabToken: '' } as SettingsFormData;
+        throw new Error('Failed to load settings');
       }
-      return response.json();
+      return (await res.json()) as SettingsFormData;
     },
-    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
-  const { data: userProjects, isLoading: projectsLoading } = useQuery({
-    queryKey: ['user-projects'],
-    queryFn: async () => {
-      if (!userData) return [];
-      const response = await fetch('/api/projects');
-      if (!response.ok) throw new Error('Failed to fetch projects');
-      return response.json();
-    },
-    enabled: !!userData,
-  });
+  /* local form state */
+  const [name, setName] = useState('');
+  const [hostInput, setHostInput] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [gitlabToken, setGitlabToken] = useState('');
+  const [isActive, setIsActive] = useState(false);
 
-  const { data: activeProject, isLoading: activeLoading } = useQuery({
-    queryKey: ['user-active-project'],
-    queryFn: async () => {
-      if (!userData) return null;
-      const response = await fetch('/api/projects/active');
-      if (!response.ok) return null;
-      return response.json();
-    },
-    enabled: !!userData,
-  });
+  /* frozen snapshot – never changes after first load */
+  const serverSnapshot = useRef<SettingsFormData | null>(null);
+  useEffect(() => {
+    if (!serverSettings) return;
+    if (serverSnapshot.current) return; // already hydrated
+    serverSnapshot.current = serverSettings;
+    setName(serverSettings.name || '');
+    // setHostInput(serverSettings.gitlabHost.replace(/^https?:\/\//, '') || '');
+    setHostInput(serverSettings.gitlabHost || '');
+    setProjectId(String(serverSettings.projectId ?? ''));
+    setGitlabToken(serverSettings.gitlabToken || '');
+  }, [serverSettings]);
 
-  const validateMutation = useMutation({
-    mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/projects/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Validation failed');
-      }
-      
-      return response.json();
-    },
-  });
+  const composed = useMemo(
+    () => composeForm({ name, hostInput, projectId, gitlabToken }),
+    [name, hostInput, projectId, gitlabToken]
+  );
 
+  const dirty = useMemo(
+    () => !shallowEqual(serverSnapshot.current ?? ({} as SettingsFormData), composed),
+    [composed]
+  );
+
+  /* validation & UI */
+  const [errors, setErrors] = useState<ReturnType<typeof validate>>({});
+  const [showErrors, setShowErrors] = useState(false);
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [connStatus, setConnStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle');
+  const [connMessage, setConnMessage] = useState('');
+
+  /* mutations */
   const saveMutation = useMutation({
-    mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/projects', {
+    mutationFn: async (payload: SettingsFormData) => {
+      const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, save: true }),
+        body: JSON.stringify(payload),
       });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Save failed');
-      }
-      
-      return response.json();
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
     },
-    onSuccess: (data) => {
-      setActiveProject(data.project.id);
-      queryClient.invalidateQueries({ queryKey: ['user-projects'] });
-      queryClient.invalidateQueries({ queryKey: ['user-active-project'] });
-      setFormData({ name: '', gitlabHost: '', projectId: '', gitlabToken: '' });
+    onSuccess: async (saved: SettingsFormData) => {
+      setActiveProject(saved.projectId);
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      router.push('/projects');
     },
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    try {
-      await validateMutation.mutateAsync(formData);
-      await saveMutation.mutateAsync(formData);
-    } catch (error) {
-      // Error handled by mutation
+  /* actions */
+  const testConnection = async () => {
+    const v = validate(composed);
+    if (Object.keys(v).length) {
+      setErrors(v);
+      setShowErrors(true);
+      return;
     }
-  };
-
-  
-
-  const handleSetActiveProject = async (projectId: string) => {
-    
+    setShowErrors(false);
+    setConnStatus('checking');
+    setConnMessage('');
     try {
-      console.log('execute /api/projects/active',JSON.stringify({ projectId }))
-      const response = await fetch('/api/projects/active', {
+      console.log('compose', composed);
+      const res = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify({
+          name: composed.name,
+          gitlabHost: composed.gitlabHost,
+          gitlabToken: composed.gitlabToken,
+          projectId: composed.projectId
+        }),
       });
-      
-      if (response.ok) {
-        console.log('response okay')
-        setActiveProject(projectId);
-        queryClient.invalidateQueries({ queryKey: ['user-active-project'] });
+      await sleep(300);
+      if (!res.ok) {
+        const msg = (await res.text()) || 'Validation failed';
+        setConnStatus('fail');
+        setConnMessage(msg);
+        return;
       }
-    } catch (error) {
-      console.log('response not okay')
-      console.error('Failed to set active project:', error);
+      const data = await res.json();
+      setConnStatus('ok');
+      setConnMessage(data?.message ?? 'GitLab credentials are valid.');
+    } catch {
+      setConnStatus('fail');
+      setConnMessage('Network error. Please try again.');
     }
   };
 
-  if (authLoading) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="flex justify-center">
-          <span className="loading loading-spinner loading-lg"></span>
-        </div>
-      </div>
-    );
-  }
+  const onSave = () => {
+    const v = validate(composed);
+    if (Object.keys(v).length) {
+      setErrors(v);
+      setShowErrors(true);
+      return;
+    }
+    setShowErrors(false);
+    saveMutation.mutate(composed);
+  };
 
-  if (!userData) {
-    return null; // Will redirect to login
-  }
+  const onReset = () => {
+    if (!serverSnapshot.current) return;
+    setName(serverSnapshot.current.name || '');
+    setHostInput(serverSnapshot.current.gitlabHost.replace(/^https?:\/\//, '') || '');
+    setProjectId(String(serverSnapshot.current.projectId ?? ''));
+    setGitlabToken(serverSnapshot.current.gitlabToken || '');
+    setErrors({});
+    setConnStatus('idle');
+    setConnMessage('');
+    setShowErrors(false);
+  };
 
-  const isFirstTime = typeof window !== 'undefined' && window.location.search.includes('firstTime=true');
+  /* derived flags */
+  const saveDisabled = !dirty || saveMutation.isPending;
 
+  /* sticky bar visibility */
+  const [showDirtyBar, setShowDirtyBar] = useState(false);
+  useEffect(() => {
+    const requiredFilled =
+      name.trim() !== '' &&
+      hostInput.trim() !== '' &&
+      projectId.trim() !== '' &&
+      gitlabToken.trim() !== '';
+    if (!requiredFilled || saveMutation.isPending) {
+      setShowDirtyBar(false);
+      return;
+    }
+    const t = setTimeout(() => setShowDirtyBar(true), 10_0000);
+    return () => clearTimeout(t);
+  }, [name, hostInput, projectId, gitlabToken, saveMutation.isPending]);
+
+  /* ---------- render ---------- */
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-4xl mx-auto">
-        {/* User Info Header */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">Settings</h1>
-            <p className="text-base-content/70">Logged in as {userData.username}</p>
-          </div>
-          <div className="flex gap-2">
-            <span className="badge badge-primary">User ID: {userData.userId}</span>
-            <button
-              onClick={async () => {
-                await fetch('/api/auth/logout', { method: 'POST' });
-                router.push('/login');
-              }}
-              className="btn btn-ghost btn-sm"
-            >
-              Logout
-            </button>
-          </div>
+    <div className="min-h-[calc(100vh-4rem)]">
+      <section className="relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-primary/10 to-transparent" />
+        <div className="container mx-auto px-4 py-8 relative">
+          <h1 className="text-2xl md:text-3xl font-semibold">Project Settings</h1>
+          <p className="text-base-content/70 mt-1">Configure your GitLab connection and project defaults.</p>
         </div>
+      </section>
 
-        {/* Welcome Message for First Time */}
-        {isFirstTime && (
-          <div className="alert alert-info mb-8">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
+      <section className="container mx-auto px-4 pb-28 pt-2">
+        {showErrors && !!Object.keys(errors).length && (
+          <div className="alert alert-warning mb-4 rounded-2xl">
             <div>
-              <h3 className="font-bold">Welcome! Let's get you started</h3>
-              <p>Add your first GitLab project below to begin using the dashboard.</p>
+              <span className="font-medium">Please review:</span>
+              <ul className="list-disc list-inside text-sm">
+                {Object.entries(errors).map(([k, v]) => (
+                  <li key={k}>
+                    <span className="badge badge-ghost mr-2">{k}</span>
+                    {v}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         )}
 
-        {/* Existing Projects List */}
-        {userProjects && userProjects.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-xl font-semibold mb-4">Your Projects</h2>
-            <div className="space-y-4">
-              {userProjects.map((project: any) => (
-                <div key={project.id} className="card bg-base-100 shadow">
-                  <div className="card-body p-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="font-semibold">{project.name}</h3>
-                        <p className="text-sm text-base-content/70">{project.gitlab_host} • {project.project_id}</p>
-                        <p className="text-xs text-base-content/50">Added {new Date(project.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => {
-                            setFormData({
-                              name: project.name,
-                              gitlabHost: project.gitlab_host,
-                              projectId: project.project_id,
-                              gitlabToken: '', // Don't show token
-                            });
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleSetActiveProject(project.id)}
-                          disabled={activeProject?.id === project.id}
-                        >
-                          {activeProject?.id === project.id ? 'Active' : 'Select'}
-                        </button>
-                      </div>
+        <div className="rounded-2xl border border-base-300/70 shadow-sm bg-base-100/80 backdrop-blur">
+          <div className="p-6 border-b border-base-300/70 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">General</h2>
+              <p className="text-sm text-base-content/70">Your app identifies the active project using these details.</p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <StatusPill status={connStatus} />
+              <button
+                onClick={testConnection}
+                disabled={connStatus === 'checking' || isLoadingSettings}
+                className={clsx('btn btn-outline btn-sm h-10', connStatus === 'checking' && 'btn-disabled')}
+              >
+                {connStatus === 'checking' ? <span className="loading loading-spinner" /> : 'Test Connection'}
+              </button>
+              <button
+                onClick={onSave}
+                disabled={saveDisabled}
+                className={clsx('btn btn-primary btn-sm h-10', saveDisabled && 'btn-disabled')}
+              >
+                {saveMutation.isPending ? (
+                  <>
+                    <span className="loading loading-spinner" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save'
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6">
+            {isLoadingSettings ? (
+              <LoadingSkeleton />
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-7 space-y-6">
+                  <Field label="Project Name" error={showErrors ? errors.name : undefined}>
+                    <input
+                      className="input input-bordered w-full h-12"
+                      placeholder="e.g., GitLab Sanitation — Internal"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                    />
+                  </Field>
+
+                  <Field label="GitLab Host" error={showErrors ? errors.gitlabHost : undefined}>
+                    <div className="join w-full">
+                      <span className="join-item btn btn-ghost no-animation pointer-events-none h-12">https://</span>
+                      <input
+                        className="input input-bordered join-item w-full h-12"
+                        placeholder="gitlab.company.com"
+                        value={hostInput}
+                        onChange={e => setHostInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="join-item btn h-12"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => navigator.clipboard.writeText(normalizeHost(hostInput))}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </Field>
+
+                  <Field label="Project ID" error={showErrors ? errors.projectId : undefined}>
+                    <input
+                      className="input input-bordered w-full h-12"
+                      placeholder="e.g., 12345 or group/project"
+                      value={projectId}
+                      onChange={e => setProjectId(e.target.value)}
+                    />
+                  </Field>
+
+                  <Field label="Personal Access Token" error={showErrors ? errors.gitlabToken : undefined}>
+                    <div className="join w-full">
+                      <input
+                        className="input input-bordered join-item w-full h-12 font-mono"
+                        type={tokenVisible ? 'text' : 'password'}
+                        placeholder="glpat-****************"
+                        value={gitlabToken}
+                        onChange={e => setGitlabToken(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="join-item btn h-12"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => setTokenVisible(s => !s)}
+                      >
+                        {tokenVisible ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                  </Field>
+
+                  <Field label="Is Active" error={showErrors ? errors.isActive : undefined}>
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-primary"
+                      checked={isActive}
+                      onChange={(e) => setIsActive(e.target.checked)}
+                    />
+                  </Field>
+                </div>
+
+                <div className="lg:col-span-5 space-y-6">
+                  <div className="rounded-xl border border-base-300/70 p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-medium">Connection</h3>
+                      <StatusPill status={connStatus} />
+                    </div>
+                    <div className="mt-3 text-sm">
+                      {connStatus === 'idle' && (
+                        <p className="text-base-content/70">
+                          Click <span className="kbd kbd-sm">Test Connection</span> to verify host, token, and project.
+                        </p>
+                      )}
+                      {connStatus === 'checking' && (
+                        <div className="flex items-center gap-2">
+                          <span className="loading loading-spinner" />
+                          <span>Contacting GitLab…</span>
+                        </div>
+                      )}
+                      {connStatus === 'ok' && <p className="text-success">{connMessage || 'All good!'}</p>}
+                      {connStatus === 'fail' && <p className="text-error">{connMessage || 'Could not validate credentials.'}</p>}
                     </div>
                   </div>
+
+                  <div className="rounded-xl border border-base-300/70 p-4 bg-base-200/50">
+                    <h3 className="font-medium">How to create a GitLab Personal Access Token</h3>
+                    <ol className="mt-2 text-sm list-decimal list-inside space-y-2">
+                      <li>Sign in to GitLab (your instance).</li>
+                      <li>Open <b>User menu → Preferences</b>.</li>
+                      <li>Go to <b>Access Tokens</b>.</li>
+                      <li>Name it (e.g. “Sanitation App”), optional expiry.</li>
+                      <li>Select scope <code className="kbd kbd-sm">api</code> (write not required).</li>
+                      <li>Create the token, copy the value starting with <code>glpat-</code>.</li>
+                      <li>Paste it in the field on the left.</li>
+                    </ol>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Add New Project Form */}
-        <div className="card bg-base-100 shadow-xl">
-          <div className="card-body">
-            <h2 className="card-title">{userProjects?.length > 0 ? 'Add New Project' : 'Configure First Project'}</h2>
-            
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">Project Name</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="My GitLab Project"
-                  className="input input-bordered"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                />
               </div>
-
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">GitLab Host</span>
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://gitlab.com"
-                  className="input input-bordered"
-                  value={formData.gitlabHost}
-                  onChange={(e) => setFormData({ ...formData, gitlabHost: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">Project ID</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="12345 or namespace/project"
-                  className="input input-bordered"
-                  value={formData.projectId}
-                  onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">Personal Access Token</span>
-                </label>
-                <input
-                  type="password"
-                  placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
-                  className="input input-bordered"
-                  value={formData.gitlabToken}
-                  onChange={(e) => setFormData({ ...formData, gitlabToken: e.target.value })}
-                  required
-                />
-              </div>
-
-              {validateMutation.error && (
-                <div className="alert alert-error">
-                  <span>{validateMutation.error.message}</span>
-                </div>
-              )}
-
-              {validateMutation.data && (
-                <div className="alert alert-success">
-                  <span>
-                    Connected as {validateMutation.data.user.name} (@{validateMutation.data.user.username})<br />
-                    Project: {validateMutation.data.project.path_with_namespace}
-                  </span>
-                </div>
-              )}
-
-              <div className="card-actions justify-end">
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={validateMutation.isPending || saveMutation.isPending}
-                >
-                  {validateMutation.isPending || saveMutation.isPending ? (
-                    <>
-                      <span className="loading loading-spinner"></span>
-                      Validating...
-                    </>
-                  ) : (
-                    'Validate & Add Project'
-                  )}
-                </button>
-              </div>
-            </form>
+            )}
           </div>
         </div>
+      </section>
+
+      {/* Sticky Action Bar */}
+      <div className={clsx('fixed inset-x-0 bottom-0 transition-all', showDirtyBar ? 'translate-y-0' : 'translate-y-full')}>
+        <div className="container mx-auto px-4 pb-4">
+          <div className="rounded-2xl shadow-lg border border-base-300/70 bg-base-100/95 backdrop-blur p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="text-sm">
+              <span className="font-medium">Unsaved changes</span>
+              <span className="text-base-content/70"> — Don’t forget to save your updates.</span>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-ghost" onClick={onReset} disabled={saveMutation.isPending || isLoadingSettings}>
+                Reset
+              </button>
+              <button
+                type="button"
+                className={clsx('btn btn-primary', saveDisabled && 'btn-disabled')}
+                onClick={onSave}
+                disabled={saveDisabled}
+              >
+                {saveMutation.isPending ? (
+                  <>
+                    <span className="loading loading-spinner" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save Changes'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- small components ---------- */
+function StatusPill({ status }: { status: 'idle' | 'checking' | 'ok' | 'fail' }) {
+  const map = {
+    idle: { text: 'Not checked', cls: 'badge-ghost' },
+    checking: { text: 'Checking…', cls: 'badge-info' },
+    ok: { text: 'Connected', cls: 'badge-success' },
+    fail: { text: 'Failed', cls: 'badge-error' },
+  } as const;
+  const m = map[status];
+  return <span className={clsx('badge', m.cls)}>{m.text}</span>;
+}
+
+function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  return (
+    <div className="form-control">
+      <label className="label">
+        <span className="label-text font-medium">{label}</span>
+      </label>
+      {children}
+      <div className="min-h-6 mt-1">{error ? <p className="text-error text-sm">{error}</p> : null}</div>
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-pulse">
+      <div className="lg:col-span-7 space-y-6">
+        <div className="h-6 w-40 bg-base-300/70 rounded" />
+        <div className="h-12 w-full bg-base-300/70 rounded" />
+        <div className="h-6 w-40 bg-base-300/70 rounded" />
+        <div className="h-12 w-full bg-base-300/70 rounded" />
+      </div>
+      <div className="lg:col-span-5 space-y-6">
+        <div className="h-40 w-full bg-base-300/70 rounded-xl" />
       </div>
     </div>
   );

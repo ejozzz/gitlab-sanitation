@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { settingsFormSchema } from '@/lib/config';
+import { settingsFormSchema } from '@/lib/config.shared';
 import { GitLabAPIClient } from '@/lib/gitlab';
 
 export async function POST(request: NextRequest) {

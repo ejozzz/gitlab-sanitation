@@ -7,6 +7,13 @@
 @layer components {
   /* Make single (non-join) buttons follow your token */
   .btn:not(.join-item) { border-radius: var(--radius-field); }
+
+  /* Remove DaisyUI's built-in caret on menu summaries */
+  .menu.no-caret :where(li > details > summary)::after { display: none !important; }
+
+  /* (belt-and-suspenders) hide native markers too */
+  .menu.no-caret :where(li > details > summary)::-webkit-details-marker { display: none; }
+  .menu.no-caret :where(li > details > summary)::marker { content: ''; }
 }
 
 @layer utilities {
@@ -26,5 +33,11 @@
     .drawer-side > *:not(.drawer-overlay),
     .drawer-side > .drawer-overlay { transition: none !important; }
   }
+}
+
+@layer base {
+  /* hide default disclosure marker on <summary> across browsers */
+  .no-summary-marker::-webkit-details-marker { display: none; }
+  .no-summary-marker::marker { content: ''; }
 }
 

@@ -9,6 +9,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
       queries: {
         staleTime: 60 * 1000, // 1 minute
         refetchOnWindowFocus: false,
+        gcTime: 0,
+        refetchOnMount: 'always',
+        refetchOnReconnect: false,
+        retry: 0,
+        networkMode: 'always',
       },
     },
   }));

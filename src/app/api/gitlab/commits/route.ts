@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Use specific project ID from frontend
-    const { readConfig, decryptToken } = await import('@/lib/config');
+    const { readConfig, decryptToken } = await import('@/lib/config.server');
     const config = await readConfig();
     const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
     

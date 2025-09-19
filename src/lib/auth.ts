@@ -1,313 +1,204 @@
-import bcrypt from 'bcryptjs';
-import { randomBytes } from 'crypto';
-import { db } from './db';
+// src/lib/auth.ts
+import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
+import { ObjectId } from "mongodb";
+import { Users, UserSessions, UserProjects } from "./db";
 
 const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// User registration
+/* ----------  USER REGISTRATION ---------- */
 export async function registerUser(username: string, password: string) {
-  try {
-    // Check if user already exists
-    const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-    if (existingUser) {
-      throw new Error('Username already exists');
-    }
+  const users = await Users();
 
-    // Hash password
-    const passwordHash = await bcrypt.hash(password, 12);
+  const existingUser = await users.findOne({ username });
+  if (existingUser) throw new Error("Username already exists");
 
-    // Insert user
-    const result = db.prepare(`
-      INSERT INTO users (username, password_hash) 
-      VALUES (?, ?)
-    `).run(username, passwordHash);
+  const passwordHash = await bcrypt.hash(password, 12);
 
-    return { userId: result.lastInsertRowid, username };
-  } catch (error) {
-    throw new Error(`Registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
+  const result = await users.insertOne({
+    username,
+    password_hash: passwordHash,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
+
+  return { userId: result.insertedId.toString(), username };
 }
 
-// User login
+/* ----------  USER LOGIN ---------- */
 export async function loginUser(username: string, password: string) {
-  try {
-    // Get user
-    const user = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get(username) as {
-      id: number;
-      password_hash: string;
-    } | undefined;
+  const users = await Users();
+  const sessions = await UserSessions();
 
-    if (!user) {
-      throw new Error('Invalid username or password');
-    }
+  const user = await users.findOne({ username });
+  if (!user) throw new Error("Invalid username or password");
 
-    // Verify password
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    if (!isValid) {
-      throw new Error('Invalid username or password');
-    }
+  const isValid = await bcrypt.compare(password, user.password_hash);
+  if (!isValid) throw new Error("Invalid username or password");
 
-    // Create session
-    const sessionId = randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + SESSION_DURATION);
+  const sessionId = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + SESSION_DURATION);
 
-    db.prepare(`
-      INSERT INTO user_sessions (id, user_id, expires_at) 
-      VALUES (?, ?, ?)
-    `).run(sessionId, user.id, expiresAt.toISOString());
+  await sessions.insertOne({
+    _id: sessionId,
+    user_id: user._id, // store as ObjectId
+    created_at: new Date(),
+    expires_at: expiresAt,
+  });
 
-    return { sessionId, userId: user.id, username };
-  } catch (error) {
-    throw new Error(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
+  return { sessionId, userId: user._id.toString(), username: user.username };
 }
 
-// Validate session
+/* ----------  VALIDATE SESSION ---------- */
 export async function validateSession(sessionId: string) {
-  try {
-    const session = db.prepare(`
-      SELECT s.user_id, s.expires_at, u.username 
-      FROM user_sessions s 
-      JOIN users u ON s.user_id = u.id 
-      WHERE s.id = ? AND s.expires_at > ?
-    `).get(sessionId, new Date().toISOString()) as {
-      user_id: number;
-      username: string;
-      expires_at: string;
-    } | undefined;
+  const sessions = await UserSessions();
+  const users = await Users();
 
-    if (!session) {
-      return null;
-    }
+  const session = await sessions.findOne({
+    _id: sessionId,
+    expires_at: { $gt: new Date() },
+  });
 
-    return {
-      userId: session.user_id,
-      username: session.username,
-      expiresAt: new Date(session.expires_at),
-    };
-  } catch (error) {
-    console.error('Session validation error:', error);
-    return null;
-  }
+  if (!session) return null;
+
+  const user = await users.findOne({ _id: session.user_id as ObjectId });
+  if (!user) return null;
+
+  return {
+    userId: user._id.toString(),
+    username: user.username,
+    expiresAt: session.expires_at,
+  };
 }
 
-// Delete session (logout)
+/* ----------  DELETE SESSION (LOGOUT) ---------- */
 export async function deleteSession(sessionId: string) {
-  try {
-    db.prepare('DELETE FROM user_sessions WHERE id = ?').run(sessionId);
-    return true;
-  } catch (error) {
-    console.error('Session deletion error:', error);
-    return false;
-  }
+  const sessions = await UserSessions();
+  await sessions.deleteOne({ _id: sessionId });
+  return true;
 }
 
-// Get user by ID
-export async function getUserById(userId: number) {
-  try {
-    const user = db.prepare(`
-      SELECT id, username, created_at 
-      FROM users 
-      WHERE id = ?
-    `).get(userId) as {
-      id: number;
-      username: string;
-      created_at: string;
-    } | undefined;
+/* ----------  GET USER BY ID ---------- */
+export async function getUserById(userId: string) {
+  const users = await Users();
 
-    return user;
-  } catch (error) {
-    console.error('Get user error:', error);
-    return null;
-  }
+  const user = await users.findOne(
+    { _id: new ObjectId(userId) },
+    { projection: { username: 1, created_at: 1 } }
+  );
+
+  return user
+    ? { id: user._id.toString(), username: user.username, created_at: user.created_at }
+    : null;
 }
 
-// Get user's active project
-export async function getUserActiveProject(userId: number) {
-  try {
-    const project = db.prepare(`
-      SELECT id, name, gitlab_host, project_id, is_active, created_at, updated_at
-      FROM user_projects 
-      WHERE user_id = ? AND is_active = true 
-      LIMIT 1
-    `).get(userId) as {
-      id: number;
-      name: string;
-      gitlab_host: string;
-      project_id: string;
-      is_active: boolean;
-      created_at: string;
-      updated_at: string;
-    } | undefined;
-
-    return project;
-  } catch (error) {
-    console.error('Get active project error:', error);
-    return null;
-  }
+/* ----------  GET USER ACTIVE PROJECT ---------- */
+export async function getUserActiveProject(userId: string) {
+  const projects = await UserProjects();
+  return await projects.findOne({
+    user_id: new ObjectId(userId),
+    is_active: true,
+  });
 }
 
-// Get all user projects
-export async function getUserProjects(userId: number) {
-  try {
-    const projects = db.prepare(`
-      SELECT id, name, gitlab_host, project_id, is_active, created_at, updated_at
-      FROM user_projects 
-      WHERE user_id = ? 
-      ORDER BY created_at DESC
-    `).all(userId) as Array<{
-      id: number;
-      name: string;
-      gitlab_host: string;
-      project_id: string;
-      is_active: boolean;
-      created_at: string;
-      updated_at: string;
-    }>;
-
-    return projects;
-  } catch (error) {
-    console.error('Get user projects error:', error);
-    return [];
-  }
+/* ----------  GET ALL USER PROJECTS ---------- */
+export async function getUserProjects(userId: string) {
+  const projects = await UserProjects();
+  return await projects
+    .find({ user_id: new ObjectId(userId) })
+    .sort({ created_at: -1 })
+    .toArray();
 }
 
-// Set user active project
-export async function setUserActiveProject(userId: number, projectId: number) {
-  try {
-    // First, deactivate all projects for this user
-    db.prepare('UPDATE user_projects SET is_active = false WHERE user_id = ?').run(userId);
+/* ----------  SET USER ACTIVE PROJECT ---------- */
+export async function setUserActiveProject(userId: string, projectId: string) {
+  const projects = await UserProjects();
 
-    // Then activate the selected project
-    const result = db.prepare(`
-      UPDATE user_projects 
-      SET is_active = true, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ? AND user_id = ?
-    `).run(projectId, userId);
+  // Deactivate all
+  await projects.updateMany(
+    { user_id: new ObjectId(userId) },
+    { $set: { is_active: false } }
+  );
 
-    if (result.changes === 0) {
-      throw new Error('Project not found or does not belong to user');
-    }
+  // Activate selected
+  const result = await projects.updateOne(
+    { _id: new ObjectId(projectId), user_id: new ObjectId(userId) },
+    { $set: { is_active: true, updated_at: new Date() } }
+  );
 
-    return true;
-  } catch (error) {
-    console.error('Set active project error:', error);
-    return false;
+  if (result.modifiedCount === 0) {
+    throw new Error("Project not found or does not belong to user");
   }
+  return true;
 }
 
-// Add user project
+/* ----------  ADD USER PROJECT ---------- */
 export async function addUserProject(
-  userId: number,
+  userId: string,
   name: string,
   gitlabHost: string,
   projectId: string,
   token: string
 ) {
-  try {
-    // Encrypt token
-    const { encryptToken } = await import('@/lib/config');
-    const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
-    
-    if (!ENCRYPTION_KEY) {
-      throw new Error('Encryption key not configured');
-    }
+  const projects = await UserProjects();
 
-    const encrypted = encryptToken(token, ENCRYPTION_KEY);
+  const { encryptToken } = await import("@/lib/config.server");
+  const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
+  if (!ENCRYPTION_KEY) throw new Error("Encryption key not configured");
 
-    // Insert project
-    const result = db.prepare(`
-      INSERT INTO user_projects (
-        user_id, name, gitlab_host, project_id, 
-        token_ciphertext, token_nonce, token_tag, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      userId,
-      name,
-      gitlabHost,
-      projectId,
-      encrypted.ciphertext,
-      encrypted.nonce,
-      encrypted.tag,
-      false // Not active by default
-    );
+  const encrypted = encryptToken(token, ENCRYPTION_KEY);
 
-    return { projectId: result.lastInsertRowid };
-  } catch (error) {
-    console.error('Add user project error:', error);
-    throw new Error(`Failed to add project: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
+  const result = await projects.insertOne({
+    user_id: new ObjectId(userId),
+    name,
+    gitlab_host: gitlabHost,
+    project_id: projectId,
+    token: {
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      tag: encrypted.tag,
+    },
+    is_active: false,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
+
+  return { projectId: result.insertedId.toString() };
 }
 
-// Get user project by ID
-export async function getUserProject(userId: number, projectId: number) {
-  try {
-    const project = db.prepare(`
-      SELECT id, name, gitlab_host, project_id, is_active, created_at, updated_at
-      FROM user_projects 
-      WHERE id = ? AND user_id = ?
-    `).get(projectId, userId) as {
-      id: number;
-      name: string;
-      gitlab_host: string;
-      project_id: string;
-      is_active: boolean;
-      created_at: string;
-      updated_at: string;
-    } | undefined;
-
-    return project;
-  } catch (error) {
-    console.error('Get user project error:', error);
-    return null;
-  }
+/* ----------  GET USER PROJECT ---------- */
+export async function getUserProject(userId: string, projectId: string) {
+  const projects = await UserProjects();
+  return await projects.findOne({
+    _id: new ObjectId(projectId),
+    user_id: new ObjectId(userId),
+  });
 }
 
-// Get user project with decrypted token
-export async function getUserProjectWithToken(userId: number, projectId: number) {
-  try {
-    const project = db.prepare(`
-      SELECT id, name, gitlab_host, project_id, token_ciphertext, token_nonce, token_tag, is_active
-      FROM user_projects 
-      WHERE id = ? AND user_id = ?
-    `).get(projectId, userId) as {
-      id: number;
-      name: string;
-      gitlab_host: string;
-      project_id: string;
-      token_ciphertext: string;
-      token_nonce: string;
-      token_tag: string;
-      is_active: boolean;
-    } | undefined;
+/* ----------  GET USER PROJECT WITH TOKEN ---------- */
+export async function getUserProjectWithToken(userId: string, projectId: string) {
+  const projects = await UserProjects();
 
-    if (!project) return null;
+  const project = await projects.findOne({
+    _id: new ObjectId(projectId),
+    user_id: new ObjectId(userId),
+  });
+  if (!project) return null;
 
-    // Decrypt token
-    const { decryptToken } = await import('@/lib/config');
-    const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
-    
-    if (!ENCRYPTION_KEY) {
-      throw new Error('Encryption key not configured');
-    }
+  const { decryptToken } = await import("@/lib/config.server");
+  const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
+  if (!ENCRYPTION_KEY) throw new Error("Encryption key not configured");
 
-    const token = decryptToken(
-      project.token_ciphertext,
-      project.token_nonce,
-      project.token_tag,
-      ENCRYPTION_KEY
-    );
+  const token = decryptToken(
+    project.token.ciphertext,
+    project.token.nonce,
+    project.token.tag,
+    ENCRYPTION_KEY
+  );
 
-    return {
-      id: project.id,
-      name: project.name,
-      gitlabHost: project.gitlab_host,
-      projectId: project.project_id,
-      token: token,
-      isActive: project.is_active,
-    };
-  } catch (error) {
-    console.error('Get user project with token error:', error);
-    return null;
-  }
+  return {
+    ...project,
+    id: project._id.toString(),
+    token,
+  };
 }
