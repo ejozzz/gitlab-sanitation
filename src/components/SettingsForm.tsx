@@ -1,3 +1,4 @@
+//app/components/SettingsForm.tsx
 'use client';
 
 import { useState } from 'react';
@@ -39,7 +40,7 @@ export default function SettingsForm() {
 
   const saveMutation = useMutation({
     mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/config', {
+      const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data, save: true }),

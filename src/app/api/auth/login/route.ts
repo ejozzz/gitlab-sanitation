@@ -1,3 +1,5 @@
+// app/api/auth/login/routeModule.ts
+
 import { NextRequest, NextResponse } from 'next/server';
 import { loginUser } from '@/lib/auth';
 import { z } from 'zod';
@@ -14,7 +16,6 @@ export async function POST(request: NextRequest) {
 
     const result = await loginUser(validated.username, validated.password);
 
-    // Create response with session cookie
     const response = NextResponse.json({
       success: true,
       userId: result.userId,
@@ -22,14 +23,13 @@ export async function POST(request: NextRequest) {
       message: 'Login successful',
     });
 
-    // Set HTTP-only session cookie
     response.cookies.set({
       name: 'session-id',
       value: result.sessionId,
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+      maxAge: 60 * 60 * 24 * 7,
       path: '/',
     });
 
@@ -41,17 +41,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
     if (error instanceof Error && error.message === 'Invalid username or password') {
-      return NextResponse.json(
-        { error: 'Invalid username or password' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Invalid username or password' }, { status: 401 });
     }
-
-    return NextResponse.json(
-      { error: 'Login failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Login failed' }, { status: 500 });
   }
 }

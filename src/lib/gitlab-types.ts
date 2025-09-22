@@ -1,3 +1,4 @@
+// src/lib/gitlab-types.ts
 export interface GitLabUser {
   id: number;
   username: string;

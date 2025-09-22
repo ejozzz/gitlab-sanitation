@@ -1,3 +1,4 @@
+//app/api/projects/validate/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { settingsFormSchema } from '@/lib/config.shared';
 import { GitLabAPIClient } from '@/lib/gitlab';

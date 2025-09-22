@@ -1,5 +1,6 @@
+// src/lib/api-helpers.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getActiveProjectConfig } from './config';
+import { getActiveProjectConfig } from './active-project.server';
 import { GitLabAPIClient } from './gitlab';
 
 export async function getGitLabClient(): Promise<GitLabAPIClient | null> {

@@ -1,3 +1,4 @@
+//app/api/gitlab/commits/[sha]/diff/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getGitLabClientOrFail, handleApiError } from '@/lib/api-helpers';
 

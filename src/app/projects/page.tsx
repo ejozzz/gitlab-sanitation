@@ -7,7 +7,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 
 type ApiProjectRow =
-    
+
     | {
         id: string;
         name: string;
@@ -41,13 +41,13 @@ function parseHostFromGitlabUrl(gitlab_url: string | undefined) {
 
 /** Make whatever your /api/projects returns look like ProjectCardData */
 function coerce(row: ApiProjectRow): ProjectCardData {
-    
+
     // Already normalized?
     if ('gitlabHost' in row) {
-            console.debug('id',row.id);
-    console.debug('host',row.gitlabHost);
-    console.debug('projectId',row.projectId);
-    console.debug('name',row.name);
+        console.debug('id', row.id);
+        console.debug('host', row.gitlabHost);
+        console.debug('projectId', row.projectId);
+        console.debug('name', row.name);
         return {
             id: row.id!,
             name: row.name,
@@ -86,16 +86,25 @@ export default function ProjectsPage() {
     // e.g. your GET /api/projects handler should return:
     // [{ id, name, gitlab_url, projectid, created_at, updated_at, is_active }, ...]
     const { data, isLoading, error } = useQuery({
-        queryKey: ['projects'],
-        queryFn: async (): Promise<ProjectCardData[]> => {
+        queryKey: ['projects', 'list'],          // tiny key change triggers fresh fetch
+        queryKey: ['nav-projects', activeProjectId],
+        queryFn: async () => {
             const res = await fetch('/api/projects', { cache: 'no-store' });
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
-            console.debug('data',json);
             if (!Array.isArray(json)) return [];
-            return json.map(coerce);
+            return json.map((r) => ({
+                id: String(r.id ?? r._id),
+                name: r.name,
+                gitlabHost: r.gitlabHost ?? r.gitlab_host ?? '',
+                projectId: String(r.projectId ?? r.project_id),
+                createdAt: r.createdAt ?? r.created_at,
+                updatedAt: r.updatedAt ?? r.updated_at,
+                isActive: r.isActive ?? r.is_active,
+            }));
         },
-        refetchOnMount: true,        // ✅ always fetch fresh when mounted
+        staleTime: 0,        // <— immediately consider data stale
+        refetchOnMount: 'always',
     });
 
     // POST set active (you can implement as POST /api/projects/active with body { id })

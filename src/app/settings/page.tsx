@@ -1,3 +1,4 @@
+// app/settings/pages.tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -59,19 +60,29 @@ export default function SettingsPage() {
 
   /* server data (fetched once) */
   const { data: serverSettings, isLoading: isLoadingSettings } = useQuery({
-    queryKey: ['projects'],
-    queryFn: async () => {
-      const res = await fetch('/api/projects', { cache: 'no-store' });
-      if (!res.ok) {
-        if (res.status === 404)
-          return { name: '', gitlabHost: '', projectId: '', gitlabToken: '' } as SettingsFormData;
-        throw new Error('Failed to load settings');
-      }
-      return (await res.json()) as SettingsFormData;
-    },
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
+  queryKey: ['projects'],
+  queryFn: async () => {
+    const res = await fetch('/api/projects', { cache: 'no-store' });
+    if (!res.ok) {
+      if (res.status === 404)
+        return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
+      throw new Error('Failed to load settings');
+    }
+    const list: any[] = await res.json();
+    const active = list.find((p) => p.isActive) ?? list[0] ?? null;
+    if (!active)
+      return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
+    return {
+      name: active.name,
+      gitlabHost: active.gitlabHost,
+      projectId: String(active.projectId),
+      gitlabToken: '', // never pre-fill token
+      isActive: Boolean(active.isActive),
+    } as SettingsFormData;
+  },
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+});
 
   /* local form state */
   const [name, setName] = useState('');
@@ -112,21 +123,23 @@ export default function SettingsPage() {
 
   /* mutations */
   const saveMutation = useMutation({
-    mutationFn: async (payload: SettingsFormData) => {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-    onSuccess: async (saved: SettingsFormData) => {
-      setActiveProject(saved.projectId);
-      await queryClient.invalidateQueries({ queryKey: ['projects'] });
-      router.push('/projects');
-    },
-  });
+  mutationFn: async (payload: SettingsFormData) => {
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+  onSuccess: async () => {
+    // 1. wipe the cache first
+    await queryClient.invalidateQueries({ queryKey: ['projects'] });
+    // 2. change route only after cache is empty
+    setActiveProject(composed.projectId);
+    router.push('/projects');
+  },
+});
 
   /* actions */
   const testConnection = async () => {
@@ -179,16 +192,17 @@ export default function SettingsPage() {
   };
 
   const onReset = () => {
-    if (!serverSnapshot.current) return;
-    setName(serverSnapshot.current.name || '');
-    setHostInput(serverSnapshot.current.gitlabHost.replace(/^https?:\/\//, '') || '');
-    setProjectId(String(serverSnapshot.current.projectId ?? ''));
-    setGitlabToken(serverSnapshot.current.gitlabToken || '');
-    setErrors({});
-    setConnStatus('idle');
-    setConnMessage('');
-    setShowErrors(false);
-  };
+  if (!serverSnapshot.current) return;
+  setName(serverSnapshot.current.name || '');
+  setHostInput(serverSnapshot.current.gitlabHost || '');      // keep protocol
+  setProjectId(String(serverSnapshot.current.projectId ?? ''));
+  setGitlabToken(serverSnapshot.current.gitlabToken || '');
+  setIsActive(serverSnapshot.current.isActive ?? false);      // restore checkbox
+  setErrors({});
+  setConnStatus('idle');
+  setConnMessage('');
+  setShowErrors(false);
+};
 
   /* derived flags */
   const saveDisabled = !dirty || saveMutation.isPending;

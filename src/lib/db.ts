@@ -56,10 +56,14 @@ export interface Project {
   name: string;
   gitlab_url: string;
   projectId: string;
-  access_token: string;
   created_at?: Date;
   updated_at?: Date;
   isActive?:boolean;
+  token?: {
+    ciphertext: string;
+    nonce: string;
+    tag: string;
+  };
 }
 
 export interface ConfigKV {

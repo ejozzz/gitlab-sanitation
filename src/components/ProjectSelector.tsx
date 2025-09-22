@@ -1,3 +1,4 @@
+//app/components/ProjectSelector.tsx
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
@@ -9,38 +10,41 @@ export default function ProjectSelector() {
   const queryClient = useQueryClient();
 
   const { data: projects } = useQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', activeProjectId],
     queryFn: async () => {
       const response = await fetch('/api/projects');
-      return response.json();
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();                   // ← always return something
     },
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   const handleProjectSelect = async (projectId: string, projectName: string) => {
     console.log('=== PROJECT SELECTOR - Selecting project ===');
     console.log('Project ID:', projectId);
     console.log('Project Name:', projectName);
-    
+
     // Set the active project in the store
     setActiveProject(projectId);
-    
+
     // Update the active project in the backend
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch('/api/projects/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activeProjectId: projectId }),
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to update active project');
       }
-      
+
       console.log('Successfully updated active project in backend');
     } catch (error) {
       console.error('Failed to update active project:', error);
     }
-    
+
     // Force invalidate all queries to refresh data
     console.log('Invalidating all queries to refresh data');
     await queryClient.invalidateQueries({ queryKey: ['branches'] });
@@ -68,7 +72,7 @@ export default function ProjectSelector() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
         </svg>
       </label>
-      
+
       <ul tabIndex={0} className="dropdown-content menu menu-compact p-2 shadow bg-base-100 rounded-box w-64 max-h-96 overflow-y-auto">
         <li className="menu-title">
           <span>Projects</span>

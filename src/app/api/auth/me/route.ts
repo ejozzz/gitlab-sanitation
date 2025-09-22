@@ -1,3 +1,4 @@
+//app/api/auth/me/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession, getUserById } from "@/lib/auth";
 

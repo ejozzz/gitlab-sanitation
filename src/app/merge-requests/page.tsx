@@ -1,3 +1,4 @@
+//app/merge-requests/page.tsx
 'use client';
 
 import { useState } from 'react';

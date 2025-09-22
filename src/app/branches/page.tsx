@@ -1,3 +1,4 @@
+//app/branches/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -32,18 +33,21 @@ export default function BranchesPage() {
 
   // Project context header
   const { data: projectInfo } = useQuery({
-    queryKey: ['active-project-info', activeProjectId],
-    queryFn: async () => {
-      if (!activeProjectId) return null;
-      
-      const response = await fetch('/api/config');
-      if (!response.ok) return null;
-      
-      const config = await response.json();
-      return config.projects?.find((p: any) => p.id === activeProjectId);
-    },
-    enabled: !!activeProjectId,
-  });
+  queryKey: ['active-project-info', activeProjectId],
+  queryFn: async () => {
+    if (!activeProjectId) return null;
+
+    const res = await fetch('/api/config');
+    if (!res.ok) return null;
+
+    const config: any = await res.json().catch(() => ({}));
+    const list: any[] = config?.projects ?? [];
+    const found = list.find((p) => p.id === activeProjectId);
+
+    return found ?? null;          // ← absolutely never undefined
+  },
+  enabled: !!activeProjectId,
+});
 
   if (!activeProjectId) {
     return (
