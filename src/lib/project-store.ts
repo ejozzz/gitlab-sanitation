@@ -1,30 +1,32 @@
 // src/lib/project-store.ts
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, PersistOptions } from 'zustand/middleware';
 
 interface ProjectStore {
   activeProjectId: string | null;
   setActiveProject: (projectId: string) => void;
   clearActiveProject: () => void;
+  loaded: boolean;
+  setLoaded: (v: boolean) => void; // <-- 1. setter
 }
 
 export const useProjectStore = create<ProjectStore>()(
   persist(
     (set) => ({
       activeProjectId: null,
+      loaded: false,
       setActiveProject: (projectId) => {
-        console.log('ProjectStore: Setting active project to:', projectId);
         set({ activeProjectId: projectId });
       },
       clearActiveProject: () => {
-        console.log('ProjectStore: Clearing active project');
         set({ activeProjectId: null });
       },
+      setLoaded: (v) => set({ loaded: v }), // <-- 2. implement
     }),
     {
       name: 'project-store',
-      // Add this to ensure state changes trigger re-renders
-      partialize: (state) => ({ activeProjectId: state.activeProjectId }),
-    }
+      // 3. fire when hydration finishes
+      onRehydrateStorage: () => (state) => state?.setLoaded(true),
+    } as PersistOptions<ProjectStore>
   )
 );

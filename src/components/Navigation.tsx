@@ -23,7 +23,7 @@ export default function Navigation({
         <div className="navbar bg-base-200/80 backdrop-blur border-b border-base-300/70">
           <div className="navbar-start">
             <Link href="/" className="btn btn-ghost px-2 text-lg md:text-xl">
-              <span className="font-semibold">GitLab Sanitation</span>
+              <span className="font-semibold">GitLab</span>
             </Link>
           </div>
           <div className="navbar-end gap-2 pr-2">
@@ -85,7 +85,7 @@ export default function Navigation({
           </label>
 
           <Link href="/" className="btn btn-ghost px-2 text-lg md:text-xl">
-            <span className="font-semibold">GitLab Sanitation</span>
+            <span className="font-semibold"></span>
           </Link>
         </div>
 
@@ -94,9 +94,6 @@ export default function Navigation({
         {/* Right: actions */}
         <div className="navbar-end gap-2 pr-2">
           <ProjectSelector />
-          <Link href="/settings?firstTime=true" className="btn btn-primary btn-sm h-10 hidden sm:inline-flex">
-            + New Project
-          </Link>
           <ThemeSwitcher />
           {isLoading ? (
             <div className="avatar placeholder">

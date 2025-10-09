@@ -32,12 +32,14 @@ function composeForm(fields: {
   hostInput: string;
   projectId: string;
   gitlabToken: string;
+  isActive: boolean;
 }): SettingsFormData {
   return {
     name: fields.name,
     projectId: fields.projectId,
     gitlabToken: fields.gitlabToken,
     gitlabHost: normalizeHost(fields.hostInput),
+    isActive:fields.isActive
   };
 }
 
@@ -55,34 +57,38 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const params = useSearchParams();
-  const firstTime = params?.get('firstTime') === 'true';
   const { setActiveProject } = useProjectStore();
 
-  /* server data (fetched once) */
+  // NEW: flag from URL to force a fresh/blank form
+  const isNew = params.get('new') === '1';
+
+  /* server data (fetched once) — disabled when isNew */
   const { data: serverSettings, isLoading: isLoadingSettings } = useQuery({
-  queryKey: ['projects'],
-  queryFn: async () => {
-    const res = await fetch('/api/projects', { cache: 'no-store' });
-    if (!res.ok) {
-      if (res.status === 404)
+    queryKey: ['projects'],
+    enabled: !isNew, // <-- do not fetch when new=1
+    queryFn: async () => {
+      const res = await fetch('/api/projects', { cache: 'no-store' });
+      if (!res.ok) {
+        if (res.status === 404)
+          return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
+        throw new Error('Failed to load settings');
+      }
+      const list: any[] = await res.json();
+      const active = list.find((p) => p.isActive) ?? list[0] ?? null;
+      if (!active)
         return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
-      throw new Error('Failed to load settings');
-    }
-    const list: any[] = await res.json();
-    const active = list.find((p) => p.isActive) ?? list[0] ?? null;
-    if (!active)
-      return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
-    return {
-      name: active.name,
-      gitlabHost: active.gitlabHost,
-      projectId: String(active.projectId),
-      gitlabToken: '', // never pre-fill token
-      isActive: Boolean(active.isActive),
-    } as SettingsFormData;
-  },
-  refetchOnWindowFocus: false,
-  refetchOnReconnect: false,
-});
+      return {
+        userid: active.userid,
+        name: active.name,
+        gitlabHost: active.gitlabHost,
+        projectId: String(active.projectId),
+        gitlabToken: '', // never pre-fill token
+        isActive: Boolean(active.isActive),
+      } as SettingsFormData;
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
 
   /* local form state */
   const [name, setName] = useState('');
@@ -91,21 +97,47 @@ export default function SettingsPage() {
   const [gitlabToken, setGitlabToken] = useState('');
   const [isActive, setIsActive] = useState(false);
 
-  /* frozen snapshot – never changes after first load */
+  /* frozen snapshot – never changes after first load (edit mode only) */
   const serverSnapshot = useRef<SettingsFormData | null>(null);
+
+  // HYDRATE from server once (only when not in new mode)
   useEffect(() => {
+    if (isNew) return;
     if (!serverSettings) return;
     if (serverSnapshot.current) return; // already hydrated
     serverSnapshot.current = serverSettings;
     setName(serverSettings.name || '');
-    // setHostInput(serverSettings.gitlabHost.replace(/^https?:\/\//, '') || '');
     setHostInput(serverSettings.gitlabHost || '');
     setProjectId(String(serverSettings.projectId ?? ''));
     setGitlabToken(serverSettings.gitlabToken || '');
-  }, [serverSettings]);
+    setIsActive(serverSettings.isActive ?? false);
+  }, [serverSettings, isNew]);
+
+  // NEW: when ?new=1, force-clear the form and reset local states
+  useEffect(() => {
+    if (!isNew) return;
+    serverSnapshot.current = {
+      name: '',
+      gitlabHost: '',
+      projectId: '',
+      gitlabToken: '',
+      isActive: false,
+    }; // treat baseline as blank for dirty calc
+    setName('');
+    setHostInput('');
+    setProjectId('');
+    setGitlabToken('');
+    setIsActive(false);
+    setErrors({});
+    setConnStatus('idle');
+    setConnMessage('');
+    setShowErrors(false);
+    // also clear any cached 'projects' to avoid accidental hydration
+    queryClient.removeQueries({ queryKey: ['projects'] });
+  }, [isNew, queryClient]);
 
   const composed = useMemo(
-    () => composeForm({ name, hostInput, projectId, gitlabToken }),
+    () => composeForm({ name, hostInput, projectId, gitlabToken, isActive }),
     [name, hostInput, projectId, gitlabToken]
   );
 
@@ -123,23 +155,29 @@ export default function SettingsPage() {
 
   /* mutations */
   const saveMutation = useMutation({
-  mutationFn: async (payload: SettingsFormData) => {
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  },
-  onSuccess: async () => {
-    // 1. wipe the cache first
-    await queryClient.invalidateQueries({ queryKey: ['projects'] });
-    // 2. change route only after cache is empty
-    setActiveProject(composed.projectId);
-    router.push('/projects');
-  },
-});
+    mutationFn: async (payload: SettingsFormData) => {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          // ensure required name without altering the UI
+          name: (payload.name ?? '').trim() || `project-${payload.projectId}`,
+          // be explicit; server will also enforce (see B)
+          isActive: false,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: async (_data) => {
+      // 1. wipe the cache first
+      // await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // 2. change route only after cache is empty
+      // setActiveProject(composed.projectId);
+      router.push('/projects');
+    },
+  });
 
   /* actions */
   const testConnection = async () => {
@@ -153,7 +191,6 @@ export default function SettingsPage() {
     setConnStatus('checking');
     setConnMessage('');
     try {
-      console.log('compose', composed);
       const res = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,7 +198,7 @@ export default function SettingsPage() {
           name: composed.name,
           gitlabHost: composed.gitlabHost,
           gitlabToken: composed.gitlabToken,
-          projectId: composed.projectId
+          projectId: composed.projectId,
         }),
       });
       await sleep(300);
@@ -192,17 +229,26 @@ export default function SettingsPage() {
   };
 
   const onReset = () => {
-  if (!serverSnapshot.current) return;
-  setName(serverSnapshot.current.name || '');
-  setHostInput(serverSnapshot.current.gitlabHost || '');      // keep protocol
-  setProjectId(String(serverSnapshot.current.projectId ?? ''));
-  setGitlabToken(serverSnapshot.current.gitlabToken || '');
-  setIsActive(serverSnapshot.current.isActive ?? false);      // restore checkbox
-  setErrors({});
-  setConnStatus('idle');
-  setConnMessage('');
-  setShowErrors(false);
-};
+    if (isNew) {
+      // In NEW mode, reset to an empty form
+      setName('');
+      setHostInput('');
+      setProjectId('');
+      setGitlabToken('');
+      setIsActive(false);
+    } else if (serverSnapshot.current) {
+      // In EDIT mode, restore from server snapshot
+      setName(serverSnapshot.current.name || '');
+      setHostInput(serverSnapshot.current.gitlabHost || ''); // keep protocol
+      setProjectId(String(serverSnapshot.current.projectId ?? ''));
+      setGitlabToken(serverSnapshot.current.gitlabToken || '');
+      setIsActive(serverSnapshot.current.isActive ?? false);
+    }
+    setErrors({});
+    setConnStatus('idle');
+    setConnMessage('');
+    setShowErrors(false);
+  };
 
   /* derived flags */
   const saveDisabled = !dirty || saveMutation.isPending;
@@ -285,7 +331,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="p-6">
-            {isLoadingSettings ? (
+            {isLoadingSettings && !isNew ? (
               <LoadingSkeleton />
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -293,7 +339,7 @@ export default function SettingsPage() {
                   <Field label="Project Name" error={showErrors ? errors.name : undefined}>
                     <input
                       className="input input-bordered w-full h-12"
-                      placeholder="e.g., GitLab Sanitation — Internal"
+                      placeholder="e.g., GitLab — Internal"
                       value={name}
                       onChange={e => setName(e.target.value)}
                     />
@@ -301,21 +347,13 @@ export default function SettingsPage() {
 
                   <Field label="GitLab Host" error={showErrors ? errors.gitlabHost : undefined}>
                     <div className="join w-full">
-                      <span className="join-item btn btn-ghost no-animation pointer-events-none h-12">https://</span>
+                      <span className="join-item btn no-animation pointer-events-none h-12">https://</span>
                       <input
                         className="input input-bordered join-item w-full h-12"
                         placeholder="gitlab.company.com"
                         value={hostInput}
                         onChange={e => setHostInput(e.target.value)}
                       />
-                      <button
-                        type="button"
-                        className="join-item btn h-12"
-                        onMouseDown={e => e.preventDefault()}
-                        onClick={() => navigator.clipboard.writeText(normalizeHost(hostInput))}
-                      >
-                        Copy
-                      </button>
                     </div>
                   </Field>
 

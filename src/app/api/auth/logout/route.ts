@@ -1,37 +1,39 @@
-//app/api/auth/logout/route.ts
+// app/api/auth/logout/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { deleteSession } from "@/lib/auth";
+import { SESSION_COOKIE } from "@/lib/config.shared";
+import { cookies } from "next/headers";
 
-import { NextRequest, NextResponse } from 'next/server';
-import { deleteSession } from '@/lib/auth';
+async function performLogout(req: NextRequest) {
+  const store = await cookies();
+  const sid = store.get(SESSION_COOKIE)?.value;
+  if (sid) await deleteSession(sid);
 
-export async function POST(request: NextRequest) {
-  try {
-    const sessionId = request.cookies.get('session-id')?.value;
+  // Build a redirect response to /login
+  const loginUrl = new URL("/login", req.url);
+  const res = NextResponse.redirect(loginUrl, { status: 303 });
 
-    if (sessionId) {
-      await deleteSession(sessionId);
-    }
+  // Clear both cookies on the redirect response
+  res.cookies.set({
+    name: SESSION_COOKIE,
+    value: "",
+    path: "/",
+    expires: new Date(0),
+  });
+  res.cookies.set({
+    name: "userid",
+    value: "",
+    path: "/",
+    expires: new Date(0),
+  });
 
-    const response = NextResponse.json({
-      success: true,
-      message: 'Logged out successfully',
-    });
+  return res;
+}
 
-    // Clear session cookie
-    response.cookies.set({
-      name: 'session-id',
-      value: '',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 0,
-      path: '/',
-    });
+export async function GET(req: NextRequest) {
+  return performLogout(req);
+}
 
-    return response;
-  } catch (error) {
-    return NextResponse.json(
-      { error: 'Logout failed' },
-      { status: 500 }
-    );
-  }
+export async function POST(req: NextRequest) {
+  return performLogout(req);
 }

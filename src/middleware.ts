@@ -1,62 +1,54 @@
 // middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { SESSION_COOKIE } from "@/lib/config.shared";
 
-function isAuthed(req: NextRequest) {
-  // your cookie/session check
-  const session = req.cookies.get("session-id")?.value;
-  return Boolean(session);
-}
-
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // 1) Always allow static & public assets
-  if (
-    pathname.startsWith("/_next/") ||
-    pathname.startsWith("/favicon") ||
-    pathname.startsWith("/fonts") ||
-    pathname === "/"
-  ) {
-    return NextResponse.next();
+  // Public routes that should never be blocked
+  const isPublic =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico" ||
+    pathname === "/robots.txt";
+
+  if (isPublic) return NextResponse.next();
+
+  // 1) Cookie present?
+  const sid = req.cookies.get(SESSION_COOKIE)?.value;
+  if (!sid) {
+    const url = new URL("/login", req.url);
+    url.searchParams.set("next", pathname);
+    return NextResponse.redirect(url);
   }
 
-  // 2) Allow auth pages themselves
-  if (pathname === "/login" || pathname === "/register") {
-    return NextResponse.next();
-  }
+  // 2) Validate cookie (defend against stale/invalid sessions)
+  try {
+    const origin = req.nextUrl.origin; // http://localhost:3000 in dev
+    const meRes = await fetch(`${origin}/api/auth/me`, {
+      // Pass through the cookie so /api/auth/me can read it
+      headers: { cookie: `${SESSION_COOKIE}=${sid}` },
+      // Keep it snappy; don't block excessively
+      cache: "no-store",
+    });
 
-  // 3) API handling
-  if (pathname.startsWith("/api")) {
-    // allow public auth endpoints
-    if (
-      pathname === "/api/auth/login" ||
-      pathname === "/api/auth/register"
-    ) {
-      return NextResponse.next();
+    if (!meRes.ok) {
+      const url = new URL("/login", req.url);
+      url.searchParams.set("next", pathname);
+      return NextResponse.redirect(url);
     }
-
-    // for other API routes, return 401 JSON instead of redirecting
-    if (!isAuthed(req)) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
-  // 4) App pages: redirect unauthenticated users to /login
-  if (!isAuthed(req)) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("redirect", pathname);
+  } catch {
+    // If validation failed for any reason, fail closed
+    const url = new URL("/login", req.url);
+    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
   return NextResponse.next();
 }
 
-// Only run on what we need (exclude static/image routes by pattern)
-export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
-};
+// Exclude only the one validation endpoint you already had
+export const config = { matcher: ["/((?!api/projects/validate).*)"] };

@@ -55,7 +55,6 @@ export default function RegisterPage() {
         credentials: "include",
         body: JSON.stringify({ username: u, password: p1 }),
       });
-      console.log(res)
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Registration failed");
@@ -79,7 +78,7 @@ export default function RegisterPage() {
               <UserPlus className="size-6" />
             </div>
             <h1 className="text-2xl font-bold">Create your account</h1>
-            <p className="text-base-content/60 text-sm">Join GitLab Sanitation Dashboard</p>
+            <p className="text-base-content/60 text-sm">Join GitLab Dashboard</p>
           </header>
 
           {/* Error */}

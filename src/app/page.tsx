@@ -10,7 +10,7 @@ export default function HomePage() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="text-center py-16">
-        <h1 className="text-5xl font-bold mb-6">GitLab Sanitation Dashboard</h1>
+        <h1 className="text-5xl font-bold mb-6">GitLab Dashboard</h1>
         <p className="text-xl text-gray-600 mb-8">
           Analyze and sanitize your GitLab repositories with powerful DevOps tools
         </p>

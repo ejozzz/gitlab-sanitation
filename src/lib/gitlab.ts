@@ -44,7 +44,7 @@ const gitlabBranchSchema = z.object({
 const gitlabMergeRequestSchema = z.object({
   id: z.number(),
   iid: z.number(),
-  project_id: z.number(),
+  projectid: z.number(),
   title: z.string(),
   description: z.string().nullable(),
   state: z.enum(['opened', 'closed', 'merged', 'locked']),
@@ -77,7 +77,7 @@ export class GitLabAPIClient {
   private baseUrl: string;
   private token: string;
   private projectId: string | number;
-  
+
 
   constructor(baseUrl: string, token: string, projectId: string | number) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -99,52 +99,49 @@ export class GitLabAPIClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}/api/v4${endpoint}`;
-    
-    // Add agent options to ignore SSL errors (development only)
+
     const fetchOptions: RequestInit = {
       ...options,
       headers: {
         'PRIVATE-TOKEN': this.token,
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        Accept: 'application/json',
         ...options.headers,
       },
     };
 
-    // For Node.js environment, add SSL bypass
     if (typeof process !== 'undefined' && process.versions?.node) {
-      // @ts-ignore - Node.js specific option
-      fetchOptions.agent = new (await import('https')).Agent({
-        rejectUnauthorized: false
-      });
+      const https = await import('https');
+      // @ts-ignore – node only
+      fetchOptions.agent = new https.Agent({ rejectUnauthorized: false });
     }
 
-    try {
-      const response = await fetch(url, fetchOptions);
+    const response = await fetch(url, fetchOptions);
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Non-JSON response:', text.substring(0, 200));
-        throw new Error(`Server returned HTML instead of JSON. This might be due to SSL issues. Response: ${text.substring(0, 100)}...`);
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(`GitLab API error: ${response.status} ${response.statusText} - ${errorData.error || ''}`);
-      }
-
-      return response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        // Re-throw fetch/network errors with more context
-        if (error.message.includes('fetch') || error.message.includes('certificate')) {
-          throw new Error(`Network/SSL error: ${error.message}. This might be due to an expired or invalid SSL certificate.`);
-        }
-      }
-      throw error;
+    // ── 1. no-content responses --------------------------------------------
+    if (options.method === 'HEAD' || response.status === 204) {
+      return response as T;          // don’t read body
     }
+
+    // ── 2. make sure we really have JSON -----------------------------------
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      throw new Error(
+        `Server returned non-JSON (${contentType}): ${text.slice(0, 200)}`
+      );
+    }
+
+    // ── 3. handle real errors ----------------------------------------------
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(
+        `GitLab API error ${response.status}: ${errorData.error || response.statusText}`
+      );
+    }
+
+    // ── 4. finally parse JSON ----------------------------------------------
+    return response.json();
   }
 
   async validateToken(): Promise<{ user: GitLabUser; project: any }> {
@@ -153,33 +150,20 @@ export class GitLabAPIClient {
     return { user, project };
   }
 
-  async getBranches(search?: string): Promise<GitLabBranch[]> {
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    
+  async getBranches(query?: string): Promise<GitLabBranch[]> {
+    // query = "per_page=20&page=2"  or  "per_page=20&page=2&search=foo"
     return this.fetchGitLab<GitLabBranch[]>(
-      `/projects/${this.projectId}/repository/branches?${params}`
+      `/projects/${this.projectId}/repository/branches${query ? `?${query}` : ''}`
     );
   }
 
-  async getBranch(branchName: string): Promise<GitLabBranch | null> {
-    try {
-      return await this.fetchGitLab<GitLabBranch>(
-        `/projects/${this.projectId}/repository/branches/${encodeURIComponent(branchName)}`
-      );
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        return null;
-      }
-      throw error;
-    }
-  }
+
 
   async getCommits(refName?: string, perPage: number = 100): Promise<GitLabCommit[]> {
     const params = new URLSearchParams();
     if (refName) params.append('ref_name', refName);
     params.append('per_page', perPage.toString());
-    
+
     return this.fetchGitLab<GitLabCommit[]>(
       `/projects/${this.projectId}/repository/commits?${params}`
     );

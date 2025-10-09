@@ -16,14 +16,9 @@ const registerSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("➡️  /api/auth/register called");
     const body = await request.json().catch(() => ({}));
-    console.log("BODY:", body);
-
     const { username, password } = registerSchema.parse(body);
-
     const result = await registerUser(username, password);
-    console.log("✅ Registered user:", result.userId, result.username);
 
     return NextResponse.json(
       {

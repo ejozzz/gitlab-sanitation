@@ -1,6 +1,6 @@
 // src/lib/api-helpers.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getActiveProjectConfig } from './active-project.server';
+import { activeProjectId } from './active-project.server';
 import { GitLabAPIClient } from './gitlab';
 
 export async function getGitLabClient(): Promise<GitLabAPIClient | null> {
@@ -16,7 +16,7 @@ export async function getGitLabClient(): Promise<GitLabAPIClient | null> {
 }
 
 export async function getGitLabClientOrFail(): Promise<GitLabAPIClient> {
-  const config = await getActiveProjectConfig();
+  const config = await activeProjectId();
   if (!config) {
     throw new Error('No active project configured');
   }

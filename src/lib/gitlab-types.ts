@@ -33,7 +33,7 @@ export interface GitLabBranch {
 export interface GitLabMergeRequest {
   id: number;
   iid: number;
-  project_id: number;
+  projectid: number;
   title: string;
   description: string | null;
   state: 'opened' | 'closed' | 'merged' | 'locked';
@@ -58,7 +58,7 @@ export interface GitLabMergeRequest {
 export interface GitLabApproval {
   id: number;
   iid: number;
-  project_id: number;
+  projectid: number;
   title: string;
   description: string;
   state: string;

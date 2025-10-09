@@ -1,42 +1,16 @@
-//app/api/projects/validate/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { settingsFormSchema } from '@/lib/config.shared';
-import { GitLabAPIClient } from '@/lib/gitlab';
+// src/app/api/projects/validate/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { encryptToken } from "@/lib/config.server";
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const validated = settingsFormSchema.parse(body);
-
-    const client = new GitLabAPIClient(
-      validated.gitlabHost,
-      validated.gitlabToken,
-      validated.projectId
-    );
-
-    const { user, project } = await client.validateToken();
-
-    return NextResponse.json({
-      valid: true,
-      user: {
-        name: user.name,
-        username: user.username,
-      },
-      project: {
-        name: project.name,
-        path_with_namespace: project.path_with_namespace,
-      },
-    });
-  } catch (error) {
-    if (error instanceof Error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
-      );
+    const { gitlabToken } = await req.json();
+    if (!gitlabToken) {
+      return NextResponse.json({ ok: false, error: "gitlabToken required" }, { status: 400 });
     }
-    return NextResponse.json(
-      { error: 'Validation failed' },
-      { status: 400 }
-    );
+    const enc = await encryptToken(gitlabToken);
+    return NextResponse.json({ ok: true, sample: { ...enc, preview: gitlabToken.slice(0, 6) + "…" } });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "validate failed" }, { status: 500 });
   }
 }

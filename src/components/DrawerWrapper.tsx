@@ -16,6 +16,9 @@ import {
   ChevronDown,
 } from 'lucide-react';
 
+/**
+ * Drawer wrapper with hover-to-open submenus and "keep open when active" behavior.
+ */
 export default function DrawerWrapper({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -46,9 +49,6 @@ export default function DrawerWrapper({ children }: { children: ReactNode }) {
     if (checkboxRef.current) checkboxRef.current.checked = open;
   }, [open]);
 
-  // ❌ REMOVE the outside-click effect & body overflow locking.
-  // DaisyUI's overlay handles dismissal cleanly.
-
   const closeOnMobile = () => {
     if (!isDesktop) setOpen(false);
   };
@@ -66,7 +66,6 @@ export default function DrawerWrapper({ children }: { children: ReactNode }) {
 
       {/* PAGE CONTENT */}
       <div className="drawer-content flex min-h-screen flex-col">
-        {/* 🔁 rely on label htmlFor in Navigation; no onMenuClick here */}
         <Navigation variant="app" />
         <BreadcrumbsBar />
         <main className="flex-1 p-4 lg:p-6">{children}</main>
@@ -74,7 +73,7 @@ export default function DrawerWrapper({ children }: { children: ReactNode }) {
 
       {/* SIDEBAR */}
       <div className="drawer-side z-[1000]">
-        {/* ✅ Keep overlay so clicking the backdrop toggles the checkbox */}
+        {/* overlay so clicking the backdrop toggles the checkbox */}
         <label htmlFor={drawerId} className="drawer-overlay" />
         <SidebarPanel panelRef={panelRef} onLinkClick={closeOnMobile} />
       </div>
@@ -91,7 +90,16 @@ function SidebarPanel({
   panelRef: React.RefObject<HTMLUListElement>;
   onLinkClick: () => void;
 }) {
-  const pathname = usePathname();
+  const pathname = usePathname() || '/';
+
+  // Helpers to detect active groups
+  const isReportsActive =
+    pathname === '/reports' ||
+    pathname.startsWith('/reports/');
+
+  // const isPoliciesActive =
+  //   pathname === '/policies' ||
+  //   pathname.startsWith('/policies/');
 
   return (
     <aside className="h-full">
@@ -99,22 +107,16 @@ function SidebarPanel({
         ref={panelRef}
         className="
           menu no-caret w-72 lg:w-72 min-h-full
-          bg-base-100 border-r border-base-300 shadow-sm
+          bg-base-200 border-r border-base-300 shadow-sm
           p-3 gap-1
         "
       >
         {/* Brand / Title */}
-        <li className="menu-title px-2 py-1">
-          <span className="text-sm font-semibold opacity-70">GitLab Sanitation</span>
+        <li className="menu-title px-2 py-1 text-base-content">
+          <span className="text-sm font-semibold opacity-70 flex">GitLab Checker</span>
         </li>
 
-        {/* (Optional) mini top card area for active project */}
-        <li className="px-2 pb-2">
-          <div className="rounded-2xl border border-base-300 bg-base-100 px-3 py-2">
-            <div className="text-xs opacity-60">Active project</div>
-            <div className="text-sm font-medium truncate">ProjectSelector ↑</div>
-          </div>
-        </li>
+        <div className="divider"></div>
 
         {/* Primary nav */}
         <SidebarLink
@@ -128,21 +130,21 @@ function SidebarPanel({
           href="/branches"
           icon={<GitBranch className="w-4 h-4" />}
           label="Branches"
-          active={pathname?.startsWith('/branches')}
+          active={pathname.startsWith('/branches')}
           onClick={onLinkClick}
         />
         <SidebarLink
           href="/cherry-picks"
           icon={<GitCommit className="w-4 h-4" />}
           label="Cherry-picks"
-          active={pathname?.startsWith('/cherry-picks')}
+          active={pathname.startsWith('/cherry-picks')}
           onClick={onLinkClick}
         />
         <SidebarLink
           href="/merge-requests"
           icon={<GitPullRequest className="w-4 h-4" />}
           label="Merge Requests"
-          active={pathname?.startsWith('/merge-requests')}
+          active={pathname.startsWith('/merge-requests')}
           onClick={onLinkClick}
         />
 
@@ -150,49 +152,34 @@ function SidebarPanel({
         <li className="menu-title px-2 pt-3">
           <span className="text-sm font-semibold opacity-70">Quality & Compliance</span>
         </li>
-        <SidebarCollapsible
+
+        {/* Hover-to-open + keep-open-when-active */}
+        <SidebarCollapsibleHover
           title="Reports"
           icon={<Flag className="w-4 h-4" />}
-          defaultOpen={pathname?.startsWith('/reports')}
-        >
-          <SidebarSubLink
-            href="/reports/activity"
-            label="Activity"
-            active={pathname === '/reports/activity'}
-            onClick={onLinkClick}
-          />
-          <SidebarSubLink
-            href="/reports/sanitation"
-            label="Sanitation"
-            active={pathname === '/reports/sanitation'}
-            onClick={onLinkClick}
-          />
-          <SidebarSubLink
-            href="/reports/coverage"
-            label="Coverage"
-            active={pathname === '/reports/coverage'}
-            onClick={onLinkClick}
-          />
-        </SidebarCollapsible>
+          isGroupActive={isReportsActive}
+          items={[
+            { href: '/reports/activity', label: 'Activity' },
+            { href: '/reports/sanitation', label: 'Sanitation' },
+            { href: '/reports/coverage', label: 'Coverage' },
+          ]}
+          pathname={pathname}
+          onLinkClick={onLinkClick}
+        />
 
-        {/* <SidebarCollapsible
+        {/* Example for Policies if you want later
+        <SidebarCollapsibleHover
           title="Policies"
           icon={<ShieldCheck className="w-4 h-4" />}
-          defaultOpen={pathname?.startsWith('/policies')}
-        >
-          <SidebarSubLink
-            href="/policies/branching"
-            label="Branching Rules"
-            active={pathname === '/policies/branching'}
-            onClick={onLinkClick}
-          />
-          <SidebarSubLink
-            href="/policies/reviews"
-            label="Review & Approval"
-            active={pathname === '/policies/reviews'}
-            onClick={onLinkClick}
-          />
-        </SidebarCollapsible> */}
+          isGroupActive={isPoliciesActive}
+          items={[
+            { href: '/policies/branching', label: 'Branching Rules' },
+            { href: '/policies/reviews', label: 'Review & Approval' },
+          ]}
+          pathname={pathname}
+          onLinkClick={onLinkClick}
+        />
+        */}
 
         {/* Settings */}
         <li className="menu-title px-2 pt-3">
@@ -239,9 +226,9 @@ function SidebarLink({
         onClick={onClick}
         aria-current={active ? 'page' : undefined}
         className={[
-          'flex items-center gap-3 rounded-xl',
+          'flex items-center gap-3 rounded-xl px-3 py-2',
           'transition-colors',
-          active ? 'active' : 'hover:bg-base-200',
+          active ? 'active bg-base-100/70' : 'hover:bg-base-200',
         ].join(' ')}
       >
         {icon && <span className="shrink-0">{icon}</span>}
@@ -254,45 +241,82 @@ function SidebarLink({
   );
 }
 
-function SidebarCollapsible({
+/**
+ * Collapsible group that:
+ *  - opens on hover (desktop) using group-hover + CSS transitions
+ *  - stays open if any child route is active (isGroupActive)
+ *  - can also be toggled via click for keyboard/mobile
+ */
+function SidebarCollapsibleHover({
   title,
   icon,
-  children,
-  defaultOpen,
+  items,
+  pathname,
+  isGroupActive,
+  onLinkClick,
 }: {
   title: string;
   icon?: React.ReactNode;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
+  items: { href: string; label: string }[];
+  pathname: string;
+  isGroupActive: boolean;
+  onLinkClick: () => void;
 }) {
+  const [isToggled, setIsToggled] = useState(false);
+
+  // If a child is active or the group is toggled, we consider it open.
+  const isOpen = isGroupActive || isToggled;
+
+  // Any item active?
+  const activeSet = new Set(items.map((i) => i.href));
+  const anyChildActive = activeSet.has(pathname);
+
   return (
-    <li>
-      <details
-        className="group [&_summary::-webkit-details-marker]:hidden [&_summary::marker]:hidden"
-        {...(defaultOpen ? { open: true } : {})}
+    <li className="relative group">
+      <button
+        type="button"
+        className={[
+          'no-summary-marker w-full text-left',
+          'flex items-center gap-3 rounded-xl px-3 py-2',
+          'cursor-pointer transition-colors',
+          anyChildActive ? 'bg-base-100/70' : 'hover:bg-base-200',
+        ].join(' ')}
+        aria-expanded={isOpen}
+        onClick={() => setIsToggled((s) => !s)}
       >
-        <summary
-          className="no-summary-marker
-    flex items-center gap-3 rounded-xl cursor-pointer
-    hover:bg-base-200 transition-colors
-          "
-        >
-          {icon && <span className="shrink-0">{icon}</span>}
-          <span className="truncate">{title}</span>
-          <ChevronDown
-            className="
-              ml-auto w-4 h-4 transition-transform
-              group-open:rotate-180
-            "
+        {icon && <span className="shrink-0">{icon}</span>}
+        <span className="truncate">{title}</span>
+        <ChevronDown
+          className={[
+            'ml-auto w-4 h-4 transition-transform',
+            isOpen ? 'rotate-180' : 'group-hover:rotate-180',
+          ].join(' ')}
+        />
+      </button>
+
+      {/* Submenu */}
+      <ul
+        className={[
+          'ml-2 mt-1 space-y-1 overflow-hidden pr-1',
+          // Animate height & opacity; open if active/toggled OR on hover (desktop)
+          'transition-[max-height,opacity] duration-200',
+          (isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'),
+          'group-hover:max-h-96 group-hover:opacity-100',
+        ].join(' ')}
+      >
+        {items.map((it) => (
+          <SidebarSubLink
+            key={it.href}
+            href={it.href}
+            label={it.label}
+            active={pathname === it.href}
+            onClick={onLinkClick}
           />
-        </summary>
-        <ul className="ml-2 mt-1 space-y-1">{children}</ul>
-      </details>
+        ))}
+      </ul>
     </li>
   );
 }
-
-
 
 function SidebarSubLink({
   href,
@@ -314,7 +338,7 @@ function SidebarSubLink({
         className={[
           'flex items-center gap-2 rounded-xl pl-9 pr-3 py-2 text-sm',
           'transition-colors',
-          active ? 'active' : 'hover:bg-base-200',
+          active ? 'active bg-base-100/70' : 'hover:bg-base-200',
         ].join(' ')}
       >
         <span className="truncate">{label}</span>
@@ -323,24 +347,47 @@ function SidebarSubLink({
   );
 }
 
+/* -------------------------------- Breadcrumbs ------------------------------- */
+
 function BreadcrumbsBar() {
   const pathname = usePathname();
-  const parts = (pathname || '/').split('/').filter(Boolean);
 
-  // Build crumb items from the path (no duplicate "Home")
-  const items = parts.map((p, i) => ({
-    href: '/' + parts.slice(0, i + 1).join('/'),
-    label: prettify(p),
-  }));
+  // split into segments; keep both encoded and decoded forms
+  const segments = (pathname || '/')
+    .split('/')
+    .filter(Boolean)
+    .map((encoded) => ({
+      encoded,
+      decoded: safeDecode(encoded),
+    }));
+
+  // Build items with encoded hrefs (for correct routing) and readable labels
+  const items = segments.map((seg, i) => {
+    const href =
+      '/' + segments.slice(0, i + 1).map((s) => s.encoded).join('/');
+
+    const label =
+      seg.decoded.includes('/') ? seg.decoded : prettify(seg.decoded);
+
+    return { href, label, isLast: i === segments.length - 1 };
+  });
+
+  if (items.length === 0) return null;
 
   return (
     <div className="bg-base-200/80 backdrop-blur border-b border-base-300/70">
       <nav className="breadcrumbs text-sm max-w-screen-2xl mx-auto px-4 lg:px-6 py-2">
         <ul>
-          <li><Link href="/">Home</Link></li>
-          {items.map((c, i) => (
+          <li>
+            <Link href="/">Home</Link>
+          </li>
+          {items.map((c) => (
             <li key={c.href}>
-              {i === items.length - 1 ? <span className="font-medium text-base-content/90">{c.label}</span> : <Link href={c.href}>{c.label}</Link>}
+              {c.isLast ? (
+                <span className="font-medium text-base-content/90">{c.label}</span>
+              ) : (
+                <Link href={c.href}>{c.label}</Link>
+              )}
             </li>
           ))}
         </ul>
@@ -349,8 +396,16 @@ function BreadcrumbsBar() {
   );
 }
 
-// local helper (same as before)
-function prettify(segment: string) {
-  return segment.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+function safeDecode(s: string) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
+function prettify(segment: string) {
+  return segment
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}

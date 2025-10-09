@@ -2,7 +2,7 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import { ObjectId } from "mongodb";
-import { Users, UserSessions, UserProjects } from "./db";
+import { Users, UserSessions, Project, Projects } from "./db";
 
 const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -41,7 +41,7 @@ export async function loginUser(username: string, password: string) {
 
   await sessions.insertOne({
     _id: sessionId,
-    user_id: user._id, // store as ObjectId
+    userid: user._id, // store as ObjectId
     created_at: new Date(),
     expires_at: expiresAt,
   });
@@ -61,7 +61,7 @@ export async function validateSession(sessionId: string) {
 
   if (!session) return null;
 
-  const user = await users.findOne({ _id: session.user_id as ObjectId });
+  const user = await users.findOne({ _id: session.userid as ObjectId });
   if (!user) return null;
 
   return {
@@ -94,35 +94,35 @@ export async function getUserById(userId: string) {
 
 /* ----------  GET USER ACTIVE PROJECT ---------- */
 export async function getUserActiveProject(userId: string) {
-  const projects = await UserProjects();
+  const projects = await Projects();
   return await projects.findOne({
-    user_id: new ObjectId(userId),
+    userid: new ObjectId(userId),
     is_active: true,
   });
 }
 
 /* ----------  GET ALL USER PROJECTS ---------- */
 export async function getUserProjects(userId: string) {
-  const projects = await UserProjects();
+  const projects = await Projects();
   return await projects
-    .find({ user_id: new ObjectId(userId) })
+    .find({ userid: new ObjectId(userId) })
     .sort({ created_at: -1 })
     .toArray();
 }
 
 /* ----------  SET USER ACTIVE PROJECT ---------- */
 export async function setUserActiveProject(userId: string, projectId: string) {
-  const projects = await UserProjects();
+  const projects = await Projects();
 
   // Deactivate all
   await projects.updateMany(
-    { user_id: new ObjectId(userId) },
+    { userid: new ObjectId(userId) },
     { $set: { is_active: false } }
   );
 
   // Activate selected
   const result = await projects.updateOne(
-    { _id: new ObjectId(projectId), user_id: new ObjectId(userId) },
+    { _id: new ObjectId(projectId), userid: new ObjectId(userId) },
     { $set: { is_active: true, updated_at: new Date() } }
   );
 
@@ -140,25 +140,25 @@ export async function addUserProject(
   projectId: string,
   token: string
 ) {
-  const projects = await UserProjects();
+  const projects = await Projects();
 
   const { encryptToken } = await import("@/lib/config.server");
   const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
   if (!ENCRYPTION_KEY) throw new Error("Encryption key not configured");
 
-  const encrypted = encryptToken(token, ENCRYPTION_KEY);
+  const encrypted = encryptToken(token);
 
   const result = await projects.insertOne({
-    user_id: new ObjectId(userId),
+    userid: new ObjectId(userId),
     name,
-    gitlab_host: gitlabHost,
-    project_id: projectId,
+    gitlab_url: gitlabHost,
+    projectId: projectId,
     token: {
       ciphertext: encrypted.ciphertext,
       nonce: encrypted.nonce,
       tag: encrypted.tag,
     },
-    is_active: false,
+    isActive: false,
     created_at: new Date(),
     updated_at: new Date(),
   });
@@ -168,32 +168,29 @@ export async function addUserProject(
 
 /* ----------  GET USER PROJECT ---------- */
 export async function getUserProject(userId: string, projectId: string) {
-  const projects = await UserProjects();
+  const projects = await Projects();
   return await projects.findOne({
     _id: new ObjectId(projectId),
-    user_id: new ObjectId(userId),
+    userid: new ObjectId(userId),
   });
 }
 
 /* ----------  GET USER PROJECT WITH TOKEN ---------- */
 export async function getUserProjectWithToken(userId: string, projectId: string) {
-  const projects = await UserProjects();
+  const projects = await Projects();
 
   const project = await projects.findOne({
     _id: new ObjectId(projectId),
-    user_id: new ObjectId(userId),
+    userid: new ObjectId(userId),
   });
   if (!project) return null;
 
   const { decryptToken } = await import("@/lib/config.server");
-  const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
-  if (!ENCRYPTION_KEY) throw new Error("Encryption key not configured");
 
   const token = decryptToken(
     project.token.ciphertext,
     project.token.nonce,
-    project.token.tag,
-    ENCRYPTION_KEY
+    project.token.tag
   );
 
   return {

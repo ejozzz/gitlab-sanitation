@@ -16,7 +16,7 @@ interface Approval {
 interface ApprovalsData {
   id: number;
   iid: number;
-  project_id: number;
+  projectid: number;
   title: string;
   description: string;
   state: string;

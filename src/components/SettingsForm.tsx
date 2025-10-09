@@ -7,10 +7,11 @@ import { settingsFormSchema, type SettingsFormData } from '@/lib/config.shared';
 
 export default function SettingsForm() {
   const [formData, setFormData] = useState<SettingsFormData>({
-    name: '',         
+    name: '',
     gitlabHost: '',
     projectId: '',
     gitlabToken: '',
+    isActive: false
   });
 
   const { data: configStatus } = useQuery({
@@ -23,151 +24,152 @@ export default function SettingsForm() {
 
   const validateMutation = useMutation({
     mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/config', {
+      const response = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        // this route only needs the token; extra fields are unnecessary
+        body: JSON.stringify({ gitlabToken: data.gitlabToken }),
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Validation failed');
-      }
+      const saveMutation = useMutation({
+        mutationFn: async (data: SettingsFormData) => {
+          const response = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...data,
+              // ensure server-required 'name' without changing UI/layout
+              name: (data.name ?? '').trim() || `project-${data.projectId}`,
+              save: true,
+              // be explicit (paired with server-side enforcement below)
+              isActive: false,
+            }),
+          });
 
-      return response.json();
-    },
-  });
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Save failed');
+          }
 
-  const saveMutation = useMutation({
-    mutationFn: async (data: SettingsFormData) => {
-      const response = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, save: true }),
+          return response.json();
+        },
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Save failed');
-      }
+      const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
 
-      return response.json();
-    },
-  });
+        try {
+          // Validate first
+          const validationResult = await validateMutation.mutateAsync(formData);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+          // Then save
+          await saveMutation.mutateAsync(formData);
 
-    try {
-      // Validate first
-      const validationResult = await validateMutation.mutateAsync(formData);
+          // Reset form with success
+          setFormData({ ...formData, gitlabToken: '' });
+        } catch (error) {
+          // Error is handled by mutation
+        }
+      };
 
-      // Then save
-      await saveMutation.mutateAsync(formData);
+      return (
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title">GitLab Configuration</h2>
 
-      // Reset form with success
-      setFormData({ ...formData, gitlabToken: '' });
-    } catch (error) {
-      // Error is handled by mutation
-    }
-  };
+            {configStatus?.configured && (
+              <div className="alert alert-info">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span>Configuration is set. Last updated: {new Date(configStatus.updatedAt).toLocaleString()}</span>
+              </div>
+            )}
 
-  return (
-    <div className="card bg-base-100 shadow-xl">
-      <div className="card-body">
-        <h2 className="card-title">GitLab Configuration</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="form-control">
+                <label className="label">
+                  <span className="label-text">GitLab Host</span>
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://gitlab.com"
+                  className="input input-bordered"
+                  value={formData.gitlabHost}
+                  onChange={(e) => setFormData({ ...formData, gitlabHost: e.target.value })}
+                  required
+                />
+              </div>
 
-        {configStatus?.configured && (
-          <div className="alert alert-info">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-            <span>Configuration is set. Last updated: {new Date(configStatus.updatedAt).toLocaleString()}</span>
-          </div>
-        )}
+              <div className="form-control">
+                <label className="label">
+                  <span className="label-text">Project ID</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="12345 or namespace/project"
+                  className="input input-bordered"
+                  value={formData.projectId}
+                  onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
+                  required
+                />
+              </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="form-control">
-            <label className="label">
-              <span className="label-text">GitLab Host</span>
-            </label>
-            <input
-              type="url"
-              placeholder="https://gitlab.com"
-              className="input input-bordered"
-              value={formData.gitlabHost}
-              onChange={(e) => setFormData({ ...formData, gitlabHost: e.target.value })}
-              required
-            />
-          </div>
+              <div className="form-control">
+                <label className="label">
+                  <span className="label-text">Personal Access Token</span>
+                </label>
+                <input
+                  type="password"
+                  placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+                  className="input input-bordered"
+                  value={formData.gitlabToken}
+                  onChange={(e) => setFormData({ ...formData, gitlabToken: e.target.value })}
+                  required
+                />
+              </div>
 
-          <div className="form-control">
-            <label className="label">
-              <span className="label-text">Project ID</span>
-            </label>
-            <input
-              type="text"
-              placeholder="12345 or namespace/project"
-              className="input input-bordered"
-              value={formData.projectId}
-              onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
-              required
-            />
-          </div>
-
-          <div className="form-control">
-            <label className="label">
-              <span className="label-text">Personal Access Token</span>
-            </label>
-            <input
-              type="password"
-              placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
-              className="input input-bordered"
-              value={formData.gitlabToken}
-              onChange={(e) => setFormData({ ...formData, gitlabToken: e.target.value })}
-              required
-            />
-          </div>
-
-          {validateMutation.error && (
-            <div className="alert alert-error">
-              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>{validateMutation.error.message}</span>
-            </div>
-          )}
-
-          {validateMutation.data && (
-            <div className="alert alert-success">
-              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>
-                Connected as {validateMutation.data.user.name} (@{validateMutation.data.user.username})<br />
-                Project: {validateMutation.data.project.path_with_namespace}
-              </span>
-            </div>
-          )}
-
-          <div className="card-actions justify-end">
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={validateMutation.isPending || saveMutation.isPending}
-            >
-              {validateMutation.isPending || saveMutation.isPending ? (
-                <>
-                  <span className="loading loading-spinner"></span>
-                  Validating...
-                </>
-              ) : (
-                'Validate & Save'
+              {validateMutation.error && (
+                <div className="alert alert-error">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{validateMutation.error.message}</span>
+                </div>
               )}
-            </button>
+
+              {validateMutation.data && (
+                <div className="alert alert-success">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>
+                    Connected as {validateMutation.data.props.name} (@{validateMutation.data.props.username})<br />
+                    Project: {validateMutation.data.props.path_with_namespace}
+                  </span>
+                </div>
+              )}
+
+              <div className="card-actions justify-end">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={validateMutation.isPending || saveMutation.isPending}
+                >
+                  {validateMutation.isPending || saveMutation.isPending ? (
+                    <>
+                      <span className="loading loading-spinner"></span>
+                      Validating...
+                    </>
+                  ) : (
+                    'Validate & Save'
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
-      </div>
-    </div>
-  );
+        </div>
+      );
+    }
+  })
 }

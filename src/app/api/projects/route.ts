@@ -1,108 +1,120 @@
-// src/app/api/projects/route.ts
+// app/api/projects/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Projects, Config } from "@/lib/db";
+import { Projects } from "@/lib/db";
+import { validateSession } from "@/lib/auth";
+import { SESSION_COOKIE } from "@/lib/config.shared";
+import { cookies } from "next/headers";
+import { ObjectId } from "mongodb";
 import { encryptToken } from "@/lib/config.server";
 
-export async function GET() {
-  const col = await Projects();
-  const rows = await col
-    .find({}, { projection: { name: 1, gitlab_url: 1, projectId: 1, created_at: 1, updated_at: 1, isActive: 1 } })
-    .sort({ created_at: -1 })
-    .toArray();
-
-  const items = rows.map((r: any) => ({
-    id: String(r._id),
-    name: r.name,
-    gitlabHost: (typeof r.gitlab_url === "string" && r.gitlab_url.includes("/api/v4/projects/"))
-      ? r.gitlab_url.split("/api/v4/projects/")[0]
-      : (r.gitlabHost ?? ""),
-    projectId: r.projectId,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    isActive: !!r.isActive,
-  }));
-
-  return NextResponse.json(items);
+function toObjectId(v: any): ObjectId {
+  return v instanceof ObjectId ? v : new ObjectId(String(v));
 }
 
-/**
- * Accepts camelCase payload from Settings:
- * { name, gitlabHost, projectId, gitlabToken?, isActive? }
- * - CREATE (no existing doc): gitlabToken REQUIRED → encrypt and insert
- * - UPDATE (doc exists): gitlabToken OPTIONAL → rotate if provided
- */
+async function requireUserId(): Promise<ObjectId | null> {
+  const store = await cookies();
+  const sid = store.get(SESSION_COOKIE)?.value;
+  if (!sid) return null;
+  const s = await validateSession(sid);
+  if (!s) return null;
+  // your validateSession returns { userId, username, ... }
+  const uid = (s as any).userId ?? (s as any).userid;
+  return uid ? toObjectId(uid) : null;
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const uid = await requireUserId();
+    if (!uid) return NextResponse.json([], { status: 200 }); // client shows "No user detected" if cookie missing
+
+    const col = await Projects();
+    const url = new URL(req.url);
+    const isActiveParam = url.searchParams.get("isActive"); // optional
+
+    const filter: any = { userid: uid };
+    if (isActiveParam === "true") filter.isActive = true;
+    if (isActiveParam === "false") filter.isActive = false;
+
+    const rows = await col
+      .find(filter, {
+        projection: {
+          userid: 1,
+          name: 1,
+          gitlab_url: 1,
+          projectId: 1,
+          created_at: 1,
+          updated_at: 1,
+          isActive: 1,
+        },
+      })
+      .sort({ created_at: -1 })
+      .toArray();
+
+    // IMPORTANT: return snake_case keys the page.tsx expects
+    const items = rows.map((r: any) => ({
+      userid: String(r.userid),
+      id: String(r._id),
+      name: r.name,
+      gitlabhost:
+        typeof r.gitlab_url === "string" && r.gitlab_url.includes("/api/v4/projects/")
+          ? r.gitlab_url.split("/api/v4/projects/")[0]
+          : "",
+      projectid: String(r.projectId),
+      isactive: !!r.isActive,
+      createdat: r.created_at,
+      updatedat: r.updated_at,
+    }));
+
+    return NextResponse.json(items);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "failed to fetch projects" }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const uid = await requireUserId();
+    if (!uid) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-    const name: string = body?.name;
-    const gitlabHost: string = (body?.gitlabHost || "").trim().replace(/\/+$/, "");
-    const projectId: string = String(body?.projectId ?? "").trim();
-    const gitlabToken: string | undefined = body?.gitlabToken ? String(body.gitlabToken) : undefined;
-    const isActive: boolean = !!body?.isActive;
+    const body = await req.json().catch(() => ({}));
+    const name = String(body?.name ?? "").trim();
+    const gitlabHost = String(body?.gitlabHost ?? "").trim().replace(/\/+$/, "");
+    const projectId = String(body?.projectId ?? "").trim();
+    const gitlabToken = String(body?.gitlabToken ?? "").trim();
+    const isActive = Boolean(body?.isActive); // optional
 
-    if (!name || !gitlabHost || !projectId) {
+    if (!name || !gitlabHost || !projectId || !gitlabToken) {
       return NextResponse.json(
-        { error: "name, gitlabHost, projectId are required", receivedKeys: Object.keys(body || {}) },
+        { error: "name, gitlabHost, projectId, gitlabToken are required" },
         { status: 400 }
       );
     }
 
-    const projectsCol = await Projects();
-    const configCol = await Config();
-    const now = new Date();
     const gitlab_url = `${gitlabHost}/api/v4/projects/${projectId}`;
+    const token = await encryptToken(gitlabToken);
+    const col = await Projects();
+    const now = new Date();
 
-    const existing = await projectsCol.findOne({ projectId });
-
-    if (existing) {
-      // UPDATE
-      const update: any = {
-        name,
-        gitlab_url,
-        isActive,
-        updated_at: now,
-      };
-      if (gitlabToken && gitlabToken.trim().length > 0) {
-        const { ciphertext, nonce, tag } = encryptToken(gitlabToken);
-        update.token = { ciphertext, nonce, tag };
-      }
-      await projectsCol.updateOne(
-        { _id: existing._id },
-        { $set: update, $unset: { access_token: "" } }
-      );
-    } else {
-      // CREATE (token required)
-      if (!gitlabToken || gitlabToken.trim().length === 0) {
-        return NextResponse.json({ error: "gitlabToken is required when creating a new project" }, { status: 400 });
-      }
-      const { ciphertext, nonce, tag } = encryptToken(gitlabToken);
-      const doc: import("@/lib/db").Project = {
-        name,
-        gitlab_url,
-        projectId,
-        token: { ciphertext, nonce, tag },
-        isActive,
-        created_at: now,
-        updated_at: now,
-      };
-      await projectsCol.insertOne(doc);
+    if (isActive) {
+      await col.updateMany({ userid: uid, isActive: true }, { $set: { isActive: false, updated_at: now } });
     }
 
-    // maintain active pointer & mirror flag
-    const count = await projectsCol.countDocuments();
-    if (isActive || count === 1) {
-      await configCol.updateOne(
-        { key: "activeProjectId" },
-        { $set: { value: String(projectId) } },
-        { upsert: true }
-      );
-      await projectsCol.updateMany({}, { $set: { isActive: false } });
-      await projectsCol.updateOne({ projectId }, { $set: { isActive: true } });
-    }
+    const doc = {
+      userid: uid,
+      name,
+      gitlab_url,
+      projectId,
+      token,              // { ciphertext, nonce, tag }
+      isActive: !!isActive,
+      created_at: now,
+      updated_at: now,
+    };
 
-    return NextResponse.json({ success: true });
+    const ins = await col.insertOne(doc);
+    
+    return NextResponse.json({ ok: true, id: String(ins.insertedId) });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Save failed" }, { status: 500 });
+    // bubble up precise error
+    return NextResponse.json({ error: e?.message || "failed to create project" }, { status: 500 });
   }
 }

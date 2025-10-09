@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const branchName = searchParams.get('name');
-    const projectId = searchParams.get('projectId');
+    const projectId = searchParams.get('projectid');
 
     if (!branchName) {
       return NextResponse.json(
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       throw new Error('Configuration error');
     }
 
-    const project = config.projects.find(p => p.projectId === projectId);
+    const project = config.projects.find(p => p.projectid === projectId);
     if (!project) {
       throw new Error(`Project with ID ${projectId} not found`);
     }
@@ -46,8 +46,7 @@ export async function GET(request: NextRequest) {
     const token = decryptToken(
       project.tokenCiphertext,
       project.tokenNonce,
-      project.tokenTag,
-      ENCRYPTION_KEY
+      project.tokenTag
     );
 
     const { GitLabAPIClient } = await import('@/lib/gitlab');
