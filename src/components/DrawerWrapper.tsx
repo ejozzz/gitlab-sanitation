@@ -147,6 +147,13 @@ function SidebarPanel({
           active={pathname.startsWith('/merge-requests')}
           onClick={onLinkClick}
         />
+        <SidebarLink
+          href="/compare-wizard"
+          icon={<GitPullRequest className="w-4 h-4" />}
+          label="Compare Wizard"
+          active={pathname.startsWith('/compare-wizard')}
+          onClick={onLinkClick}
+        />
 
         {/* Grouped section */}
         <li className="menu-title px-2 pt-3">

@@ -1,121 +1,146 @@
-//app/api/gitlab/cherry-picks/route.ts
+// src/app/api/gitlab/cherry-picks/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getGitLabClientOrFail, handleApiError } from '@/lib/api-helpers';
+import { handleApiError } from '@/lib/api-helpers';
 
-function detectCherryPicksFromCommits(commits: any[]): Array<{
-  type: 'commit';
-  id: string;
+export const dynamic = 'force-dynamic';
+
+type CherryRow = {
+  commit_id: string;
+  short_id: string;
   title: string;
-  detectedBy: 'message';
-  confidence: 'high';
-  createdAt: string;
-}> {
-  return commits
-    .filter(commit => commit.message.includes('(cherry picked from commit'))
-    .map(commit => ({
-      type: 'commit' as const,
-      id: commit.id,
-      title: commit.title,
-      detectedBy: 'message' as const,
-      confidence: 'high' as const,
-      createdAt: commit.authored_date,
-    }));
+  author_name?: string;
+  committed_date?: string;
+  web_url?: string;
+  source_sha: string;
+  evidence: string;
+};
+
+function detectCherryPicksFromCommits(commits: any[]): CherryRow[] {
+  const rows: CherryRow[] = [];
+  if (!Array.isArray(commits)) return rows;
+
+  const patterns: RegExp[] = [
+    /\(cherry\s*picked\s*from\s*commit\s*([0-9a-f]{7,40})\)/i,
+    /cherry\s*[- ]?picked\s*from\s*commit\s*([0-9a-f]{7,40})/i,
+    /cherry\s*[- ]?pick(?:ed)?\s*[:#]?\s*([0-9a-f]{7,40})/i,
+  ];
+
+  for (const c of commits) {
+    const message: string = c?.message ?? c?.title ?? '';
+    if (!message) continue;
+
+    let sha: string | null = null;
+    let snippet: string | null = null;
+
+    for (const rx of patterns) {
+      const m = message.match(rx);
+      if (m) {
+        sha = m[1];
+        const idx = m.index ?? 0;
+        snippet = message.substring(idx, Math.min(idx + 160, message.length));
+        break;
+      }
+    }
+    if (!sha) continue;
+
+    rows.push({
+      commit_id: c.id ?? c.sha ?? '',
+      short_id: c.short_id ?? (c.id ? String(c.id).slice(0, 8) : ''),
+      title: c.title ?? (message.split('\n')[0] || ''),
+      author_name: c.author_name ?? c?.author_name,
+      committed_date: c.committed_date ?? c.created_at ?? c.authored_date,
+      web_url: c.web_url,
+      source_sha: sha,
+      evidence: snippet || '',
+    });
+  }
+
+  return rows;
 }
 
-function detectCherryPicksFromMRs(mergeRequests: any[]): Array<{
-  type: 'merge_request';
-  id: string;
-  title: string;
-  sourceBranch: string;
-  targetBranch: string;
-  detectedBy: 'label';
-  confidence: 'medium';
-  createdAt: string;
-  webUrl: string;
-}> {
-  return mergeRequests
-    .filter(mr => mr.labels.includes('cherry-pick'))
-    .map(mr => ({
-      type: 'merge_request' as const,
-      id: mr.iid.toString(),
-      title: mr.title,
-      sourceBranch: mr.source_branch,
-      targetBranch: mr.target_branch,
-      detectedBy: 'label' as const,
-      confidence: 'medium' as const,
-      createdAt: mr.created_at,
-      webUrl: mr.web_url,
-    }));
-}
-
-export async function GET(request: NextRequest) {
+function safeJsonParse<T = any>(text: string): { ok: boolean; data?: T; error?: string } {
   try {
-    const { searchParams } = new URL(request.url);
-    const method = searchParams.get('method') || 'all';
-    const projectId = searchParams.get('projectId');
+    return { ok: true, data: JSON.parse(text) as T };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Invalid JSON' };
+  }
+}
 
-    if (!projectId) {
-      const client = await getGitLabClientOrFail();
-      const allCherryPicks: any[] = [];
+export async function GET(req: NextRequest) {
+  try {
+    const url = new URL(req.url);
+    const ref = (url.searchParams.get('ref') ?? '').trim();
+    const page = url.searchParams.get('page') ?? '';
+    const perPage = url.searchParams.get('perPage') ?? '';
+    const projectId = url.searchParams.get('projectId');
+    const activeProjectId = url.searchParams.get('activeProjectId');
 
-      if (method === 'all' || method === 'message') {
-        const commits = await client.getCommits(undefined, 50);
-        const messageBased = detectCherryPicksFromCommits(commits);
-        allCherryPicks.push(...messageBased);
-      }
-
-      if (method === 'all' || method === 'label') {
-        const mergeRequests = await client.getMergeRequests({ labels: 'cherry-pick' });
-        const labelBased = detectCherryPicksFromMRs(mergeRequests);
-        allCherryPicks.push(...labelBased);
-      }
-
-      return NextResponse.json(allCherryPicks);
+    if (!ref) {
+      const e: any = new Error('Missing ?ref=<branch>.');
+      e.status = 400;
+      throw e;
     }
 
-    // Use specific project ID from frontend
-    const { readConfig, decryptToken } = await import('@/lib/config.server');
-    const config = await readConfig();
-    const ENCRYPTION_KEY = process.env.CONFIG_ENCRYPTION_KEY;
-    
-    if (!config || !ENCRYPTION_KEY) {
-      throw new Error('Configuration error');
+    // Build inner URL to your commits endpoint
+    const commitsUrl = new URL(`/api/gitlab/branches/${encodeURIComponent(ref)}/commits`, url.origin);
+    if (page) commitsUrl.searchParams.set('page', page);
+    if (perPage) commitsUrl.searchParams.set('perPage', perPage);
+    if (projectId) commitsUrl.searchParams.set('projectId', projectId);
+    if (activeProjectId) commitsUrl.searchParams.set('activeProjectId', activeProjectId);
+
+    // 🔐 Forward caller's cookies/authorization so session-based logic works
+    const fHeaders = new Headers();
+    const cookie = req.headers.get('cookie');
+    if (cookie) fHeaders.set('cookie', cookie);
+    const authz = req.headers.get('authorization');
+    if (authz) fHeaders.set('authorization', authz);
+    // Avoid following redirects invisibly (e.g., to login HTML)
+    const r = await fetch(commitsUrl.toString(), {
+      headers: fHeaders,
+      cache: 'no-store',
+      redirect: 'manual',
+    });
+
+    // Always read as text first (could be HTML)
+    const raw = await r.text();
+    const contentType = r.headers.get('content-type') || '';
+
+    if (!r.ok) {
+      const parsed = contentType.includes('application/json') ? safeJsonParse<any>(raw) : { ok: false };
+      const msg = parsed.ok
+        ? (parsed.data?.error || JSON.stringify(parsed.data))
+        : (raw?.slice(0, 600) || `HTTP ${r.status}`);
+      const e: any = new Error(`Upstream /commits failed (${r.status}): ${msg}`);
+      e.status = r.status;
+      throw e;
     }
 
-    const project = config.projects.find(p => p.projectid === projectId);
-    if (!project) {
-      throw new Error(`Project with ID ${projectId} not found`);
+    // Success: parse JSON if it is JSON, otherwise fail clearly
+    if (!contentType.includes('application/json')) {
+      const e: any = new Error('Upstream /commits returned non-JSON content.');
+      e.status = 502;
+      throw e;
     }
 
-    const token = decryptToken(
-      project.tokenCiphertext,
-      project.tokenNonce,
-      project.tokenTag
-    );
-
-    const { GitLabAPIClient } = await import('@/lib/gitlab');
-    const client = new GitLabAPIClient(
-      project.gitlabHost,
-      token,
-      project.projectId
-    );
-
-    const allCherryPicks: any[] = [];
-
-    if (method === 'all' || method === 'message') {
-      const commits = await client.getCommits(undefined, 50);
-      const messageBased = detectCherryPicksFromCommits(commits);
-      allCherryPicks.push(...messageBased);
+    const parsed = safeJsonParse<any>(raw);
+    if (!parsed.ok) {
+      const e: any = new Error(`Upstream /commits JSON parse error: ${parsed.error}`);
+      e.status = 502;
+      throw e;
     }
 
-    if (method === 'all' || method === 'label') {
-      const mergeRequests = await client.getMergeRequests({ labels: 'cherry-pick' });
-      const labelBased = detectCherryPicksFromMRs(mergeRequests);
-      allCherryPicks.push(...labelBased);
-    }
+    const data = parsed.data;
+    const commits = Array.isArray(data) ? data : (data.items ?? data.commits ?? data.data ?? []);
+    const detected = detectCherryPicksFromCommits(commits);
 
-    return NextResponse.json(allCherryPicks);
-  } catch (error) {
-    return handleApiError(error);
+    return NextResponse.json({
+      ref,
+      page: Number((data && data.page) ?? page || 1),
+      perPage: Number((data && data.perPage) ?? perPage || 50),
+      count: detected.length,
+      items: detected,
+    });
+  } catch (err) {
+    return handleApiError(err);
   }
 }

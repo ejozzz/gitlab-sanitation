@@ -1,12 +1,16 @@
-// middleware.ts
+// src/middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/config.shared";
 
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+export function middleware(req: NextRequest) {
+  const url = req.nextUrl;
+  const { pathname } = url;
 
-  // Public routes that should never be blocked
+  // Read session cookie once
+  const sid = req.cookies.get(SESSION_COOKIE)?.value || null;
+
+  // --- Public routes (always allowed) ---
   const isPublic =
     pathname === "/login" ||
     pathname === "/register" ||
@@ -15,40 +19,44 @@ export async function middleware(req: NextRequest) {
     pathname === "/favicon.ico" ||
     pathname === "/robots.txt";
 
-  if (isPublic) return NextResponse.next();
-
-  // 1) Cookie present?
-  const sid = req.cookies.get(SESSION_COOKIE)?.value;
-  if (!sid) {
-    const url = new URL("/login", req.url);
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
-  }
-
-  // 2) Validate cookie (defend against stale/invalid sessions)
-  try {
-    const origin = req.nextUrl.origin; // http://localhost:3000 in dev
-    const meRes = await fetch(`${origin}/api/auth/me`, {
-      // Pass through the cookie so /api/auth/me can read it
-      headers: { cookie: `${SESSION_COOKIE}=${sid}` },
-      // Keep it snappy; don't block excessively
-      cache: "no-store",
-    });
-
-    if (!meRes.ok) {
-      const url = new URL("/login", req.url);
-      url.searchParams.set("next", pathname);
-      return NextResponse.redirect(url);
+  // If user is authenticated and visits /login, send them to ?next or home
+  if (pathname === "/login") {
+    if (sid) {
+      const next = url.searchParams.get("next") || "/";
+      const dest = new URL(next, url);
+      dest.search = ""; // avoid keeping ?next to prevent loops
+      return NextResponse.redirect(dest);
     }
-  } catch {
-    // If validation failed for any reason, fail closed
-    const url = new URL("/login", req.url);
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+    return NextResponse.next();
   }
 
+  if (isPublic) {
+    return NextResponse.next();
+  }
+
+  // --- Wizard internal fetch whitelist (leave as you had it) ---
+  const isProjectsApi = pathname.startsWith("/api/projects");
+  const isWizardInternalFetch =
+    req.headers.get("x-compare-wizard") === "1" ||
+    req.headers.get("x-internal-fetch") === "1";
+  if (isProjectsApi && isWizardInternalFetch) {
+    return NextResponse.next();
+  }
+  // -------------------------------------------------------------
+
+  // Require a session cookie for all other routes
+  if (!sid) {
+    const loginUrl = new URL("/login", req.url);
+    // optional: preserve deep path
+    loginUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // ✅ Trust the cookie here; don't call /api/auth/me from middleware.
   return NextResponse.next();
 }
 
-// Exclude only the one validation endpoint you already had
-export const config = { matcher: ["/((?!api/projects/validate).*)"] };
+// Keep your matcher; optionally tighten static skips.
+export const config = {
+  matcher: ["/((?!_next|favicon.ico|robots.txt|api/projects/validate).*)"],
+};

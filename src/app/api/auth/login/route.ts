@@ -5,36 +5,43 @@ import { SESSION_COOKIE } from "@/lib/config.shared";
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password } = await req.json();
+    const { username, password, remember } = await req.json();
     if (!username || !password) {
       return NextResponse.json({ error: "missing credentials" }, { status: 400 });
     }
 
-    // lib/auth.ts returns { sessionId, userId, username }
+    // Detect protocol (Cloudflare sets x-forwarded-proto=https)
+    const proto =
+      (req.headers.get("x-forwarded-proto") ??
+        new URL(req.url).protocol.replace(":", "")).toLowerCase();
+    const isHttps = proto === "https";
+
     const { sessionId, userId } = await loginUser(username, password);
 
     const res = NextResponse.json({ ok: true });
 
-    // 1) httpOnly session cookie (server reads this)
+    // Choose flags per environment
+    const common = {
+      path: "/",
+      maxAge: remember ? 60 * 60 * 24 * 30 : 60 * 60 * 8,
+    } as const;
+
     res.cookies.set({
-      name: SESSION_COOKIE,           // "session-id"
+      name: SESSION_COOKIE, // "session-id"
       value: sessionId,
       httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7,       // 7 days
+      secure: isHttps,
+      sameSite: isHttps ? "none" : "lax",
+      ...common,
     });
 
-    // 2) NON-httpOnly userid cookie (client reads this in /projects)
     res.cookies.set({
       name: "userid",
       value: String(userId),
-      httpOnly: false,                // must be readable by client JS
-      sameSite: "lax",
-      path: "/",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7,
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: isHttps ? "none" : "lax",
+      ...common,
     });
 
     return res;

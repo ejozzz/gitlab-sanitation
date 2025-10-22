@@ -92,8 +92,8 @@ export default function BranchTable({
 
   return (
     <>
-      <div className="overflow-x-auto">
-        <table className="table table-zebra w-full">
+      <div className="overflow-x-auto rounded-box border border-base-content/5 bg-base-100">
+        <table className="table w-full">
           <thead>
             <tr>
               <th>Branch</th>

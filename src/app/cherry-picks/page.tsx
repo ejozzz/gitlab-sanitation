@@ -1,112 +1,250 @@
-//app/cherry-picks/page.tsx
+// src/app/cherry-picks/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useProjectStore } from '@/lib/project-store';
-import CherryPickList from '@/components/CherryPickList';
-import type { CherryPick } from '@/lib/gitlab-types';
 
-export default function CherryPicksPage() {
-  const [detectionMethod, setDetectionMethod] = useState<'message' | 'label' | 'all'>('all');
-  const { activeProjectId } = useProjectStore();
+/* ===== Types ===== */
+type WatchlistResp = { source: 'env' | 'default'; branches: string[] };
 
-  const { data: cherryPicks, isLoading, error } = useQuery<CherryPick[]>({
-    queryKey: ['cherry-picks', detectionMethod, activeProjectId],
-    queryFn: async () => {
-      if (!activeProjectId) return [];
-      
-      const response = await fetch(`/api/gitlab/cherry-picks?method=${detectionMethod}`);
-      if (!response.ok) throw new Error('Failed to fetch cherry-picks');
-      return response.json();
-    },
-    enabled: !!activeProjectId,
-  });
+type CherryItem = {
+  commit_id: string;
+  short_id: string;
+  title: string;
+  author_name?: string;
+  committed_date?: string;
+  web_url?: string;
+  source_sha: string;
+  evidence: string;
+};
+type CherryResp = {
+  ref: string;
+  page: number;
+  perPage: number;
+  count: number;
+  items: CherryItem[];
+};
 
-  // Project context header
-  const { data: projectInfo } = useQuery({
-    queryKey: ['active-project-info', activeProjectId],
-    queryFn: async () => {
-      if (!activeProjectId) return null;
-      
-      const response = await fetch('/api/config');
-      if (!response.ok) return null;
-      
-      const config = await response.json();
-      return config.projects?.find((p: any) => p.id === activeProjectId);
-    },
-    enabled: !!activeProjectId,
-  });
+/* ===== Fetchers ===== */
+async function fetchWatchlist(): Promise<WatchlistResp> {
+  const r = await fetch('/api/watchlist', { cache: 'no-store' });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
-  if (!activeProjectId) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="text-center py-16">
-          <div className="mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="w-16 h-16 mx-auto stroke-current text-warning">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-          </div>
-          <h1 className="text-3xl font-bold mb-4">No Project Selected</h1>
-          <p className="text-base-content/70 mb-8">Please select a project to analyze cherry-picks.</p>
-          <a href="/settings" className="btn btn-primary">Configure Projects</a>
-        </div>
-      </div>
-    );
+async function fetchCherryPicks(
+  ref: string,
+  page = 1,
+  perPage = 50,
+  activeProjectId?: string | number
+): Promise<CherryResp> {
+  const u = new URL('/api/gitlab/cherry-picks', window.location.origin);
+  u.searchParams.set('ref', ref);
+  u.searchParams.set('page', String(page));
+  u.searchParams.set('perPage', String(perPage));
+  if (activeProjectId != null) u.searchParams.set('activeProjectId', String(activeProjectId));
+  const r = await fetch(u.toString(), { cache: 'no-store' });
+  if (!r.ok) {
+    // propagate text for easier debugging in the UI
+    let body: string;
+    try { body = await r.text(); } catch { body = `${r.status}`; }
+    throw new Error(`Cherry-picks failed: ${r.status} ${body ? `- ${body}` : ''}`);
   }
+  return r.json();
+}
 
-  if (error) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="alert alert-error mb-4">
-          <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span>Failed to load cherry-picks: {error.message}</span>
-        </div>
-      </div>
-    );
+/* ===== Page ===== */
+export default function CherryPicksSinglePage() {
+  // selected pill + paging for table
+  const [selectedRef, setSelectedRef] = useState<string>('');
+  const [page, setPage] = useState(1);
+  const perPage = 50;
+
+  // project context (forwarded, so route works even without global "active" project)
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+
+  // deep-link support (?ref=)
+  useEffect(() => {
+    try {
+      const ref = new URL(window.location.href).searchParams.get('ref');
+      if (ref) setSelectedRef(ref);
+    } catch {}
+  }, []);
+
+  // pills from the same endpoint as your branch detail page
+  const {
+    data: watchlistResp,
+    isFetching: watchlistFetching,
+    error: watchlistError,
+  } = useQuery({
+    queryKey: ['watchlist-env'],
+    queryFn: fetchWatchlist,
+    staleTime: 60_000,
+  });
+  const watchlist = useMemo(() => watchlistResp?.branches ?? [], [watchlistResp]);
+
+  // cherry-picks for the selected pill
+  const {
+    data: cherryData,
+    isFetching: cherryFetching,
+    isLoading: cherryLoading,
+    error: cherryError,
+  } = useQuery({
+    queryKey: ['cherry-picks', selectedRef, page, perPage, activeProjectId],
+    queryFn: () => fetchCherryPicks(selectedRef, page, perPage, activeProjectId),
+    enabled: !!selectedRef,
+    staleTime: 30_000,
+  });
+  const items = useMemo(() => cherryData?.items ?? [], [cherryData]);
+
+  function onPick(ref: string) {
+    setSelectedRef(ref);
+    setPage(1);
+    // keep the URL shareable
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('ref', ref);
+      window.history.replaceState({}, '', u.toString());
+    } catch {}
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      {/* Project Context Header */}
-      {projectInfo && (
-        <div className="mb-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="badge badge-primary badge-sm">Active Project</div>
-            <span className="text-sm text-base-content/70">{projectInfo.gitlabHost}</span>
+    <div className="p-4 space-y-6">
+
+      {/* Pills (from /api/watchlist) */}
+      {watchlistError ? (
+        <div className="alert alert-error">
+          <span>{(watchlistError as Error).message}</span>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-3">
+        {watchlistFetching && !watchlist.length ? (
+          <>
+            <div className="skeleton h-12 w-64 rounded-xl" />
+            <div className="skeleton h-12 w-64 rounded-xl" />
+            <div className="skeleton h-12 w-64 rounded-xl" />
+          </>
+        ) : null}
+
+        {watchlist.map((target) => {
+          const active = selectedRef === target;
+          return (
+            <button
+              key={target}
+              onClick={() => onPick(target)}
+              className={[
+                'card shadow-sm cursor-pointer transition-colors w-auto',
+                active ? 'bg-primary text-primary-content' : 'bg-base-100 hover:bg-base-200',
+                'border border-base-300',
+              ].join(' ')}
+              title={`Show cherry-picked commits on ${target}`}
+            >
+              <div className="card-body py-3 px-4">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm break-all">{target}</span>
+                  {active ? <span className="badge badge-sm badge-info">Selected</span> : null}
+                </div>
+                <div className="text-xs opacity-70">
+                  {active ? 'Showing cherry-picked commits' : 'Click to load cherry-picked commits'}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="divider">Cherry-picked commits</div>
+
+      {/* Selected ref header + pager */}
+      <div className="flex items-center justify-between">
+        <div className="text-sm">
+          Selected branch:{' '}
+          {selectedRef ? <b className="font-mono">{selectedRef}</b> : <span className="opacity-70">none</span>}
+        </div>
+        {selectedRef ? (
+          <div className="join">
+            <button
+              className="btn join-item"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={(cherryData?.page ?? page) <= 1 || cherryFetching}
+            >
+              Prev
+            </button>
+            <button
+              className="btn join-item"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={cherryFetching}
+            >
+              Next
+            </button>
           </div>
-          <h1 className="text-3xl font-bold">{projectInfo.name} - Cherry-pick Detection</h1>
-          <p className="text-sm text-base-content/70">Project ID: {projectInfo.projectId}</p>
+        ) : null}
+      </div>
+
+      {/* Table */}
+      {!selectedRef ? (
+        <div className="alert">
+          <span>Click a branch pill above to load its cherry-picked commits.</span>
+        </div>
+      ) : cherryLoading ? (
+        <div className="skeleton h-24 w-full" />
+      ) : cherryError ? (
+        <div className="alert alert-error">
+          <span>{(cherryError as Error).message}</span>
+        </div>
+      ) : items.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="table table-zebra">
+            <thead>
+              <tr>
+                <th>Commit</th>
+                <th>Title</th>
+                <th>Author</th>
+                <th>Date</th>
+                <th>Cherry-picked from</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.commit_id}>
+                  <td className="whitespace-nowrap">
+                    {it.web_url ? (
+                      <a className="link link-primary" href={it.web_url} target="_blank" rel="noreferrer">
+                        {it.short_id}
+                      </a>
+                    ) : (
+                      <span className="font-mono">{it.short_id}</span>
+                    )}
+                  </td>
+                  <td className="max-w-xl"><div className="line-clamp-2">{it.title}</div></td>
+                  <td className="whitespace-nowrap">{it.author_name ?? '-'}</td>
+                  <td className="whitespace-nowrap">
+                    {it.committed_date ? new Date(it.committed_date).toLocaleString() : '-'}
+                  </td>
+                  <td className="whitespace-nowrap">
+                    <span className="font-mono">{it.source_sha.slice(0, 8)}</span>
+                  </td>
+                  <td className="max-w-md">
+                    <div className="text-xs opacity-70 line-clamp-2">{it.evidence}</div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="text-sm opacity-70 mt-4">
+            Page {cherryData?.page ?? page} · {items.length} found (per page: {cherryData?.perPage ?? perPage})
+          </div>
+        </div>
+      ) : (
+        <div className="alert">
+          <span>No cherry-picked commits detected on <b className="font-mono">{selectedRef}</b> for this page.</span>
         </div>
       )}
-
-      <div className="mb-8">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Cherry-pick Analysis</h2>
-          <div className="alert alert-info">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-            <span>Results are best-effort based on commit message patterns and MR labels</span>
-          </div>
-        </div>
-        
-        <div className="mt-4">
-          <select
-            className="select select-bordered"
-            value={detectionMethod}
-            onChange={(e) => setDetectionMethod(e.target.value as any)}
-          >
-            <option value="all">All methods</option>
-            <option value="message">Commit message only</option>
-            <option value="label">MR labels only</option>
-          </select>
-        </div>
-      </div>
-      
-      <CherryPickList cherryPicks={cherryPicks || []} isLoading={isLoading} />
     </div>
   );
 }

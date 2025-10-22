@@ -45,6 +45,8 @@ export async function GET(req: NextRequest) {
           created_at: 1,
           updated_at: 1,
           isActive: 1,
+          token: 1,
+          token_last4: 1,
         },
       })
       .sort({ created_at: -1 })
@@ -63,7 +65,11 @@ export async function GET(req: NextRequest) {
       isactive: !!r.isActive,
       createdat: r.created_at,
       updatedat: r.updated_at,
+      // 👇 NEW: metadata only (never plaintext)
+      hasToken: !!r.token,
+      tokenLast4: r.token_last4 ?? null,
     }));
+
 
     return NextResponse.json(items);
   } catch (e: any) {
@@ -111,7 +117,7 @@ export async function POST(req: NextRequest) {
     };
 
     const ins = await col.insertOne(doc);
-    
+
     return NextResponse.json({ ok: true, id: String(ins.insertedId) });
   } catch (e: any) {
     // bubble up precise error

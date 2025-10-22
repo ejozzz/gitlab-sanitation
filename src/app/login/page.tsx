@@ -163,7 +163,7 @@ export default function LoginPage() {
             <div className="divider text-xs opacity-60">or continue with</div>
 
             {/* Socials */}
-            <div className="grid grid-cols-2 gap-3">
+            {/*<div className="grid grid-cols-2 gap-3">
               <button type="button" className="btn btn-outline w-full h-12 justify-center">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="size-4" aria-hidden>
                   <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.169 32.243 29.004 35 24 35c-7.18 0-13-5.82-13-13s5.82-13 13-13c3.313 0 6.326 1.243 8.59 3.267l5.657-5.657C34.046 3.042 29.268 1 24 1 10.745 1 0 11.745 0 25s10.745 24 24 24 24-10.745 24-24c0-1.627-.167-3.217-.389-4.917z" />
@@ -177,7 +177,7 @@ export default function LoginPage() {
                 <Github className="size-4" />
                 GitHub
               </button>
-            </div>
+            </div>*/}
           </form>
 
           {/* Footer */}

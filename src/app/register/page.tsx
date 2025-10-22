@@ -182,23 +182,7 @@ export default function RegisterPage() {
             </button>
 
             {/* Divider (optional social) */}
-            <div className="divider text-xs opacity-60">or continue with</div>
-            <div className="grid grid-cols-2 gap-3">
-              <button type="button" className="btn btn-outline w-full h-12 justify-center">
-                {/* Google mark (same as login) */}
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="size-4" aria-hidden>
-                  <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.169 32.243 29.004 35 24 35c-7.18 0-13-5.82-13-13s5.82-13 13-13c3.313 0 6.326 1.243 8.59 3.267l5.657-5.657C34.046 3.042 29.268 1 24 1 10.745 1 0 11.745 0 25s10.745 24 24 24 24-10.745 24-24c0-1.627-.167-3.217-.389-4.917z"/>
-                  <path fill="#FF3D00" d="M0 25c0 13.255 10.745 24 24 24 5.268 0 10.046-2.042 13.747-5.41l-5.657-5.657C29.004 35 24 35 24 35c-5.004 0-9.169-2.757-11.303-6.917H1.949A23.902 23.902 0 010 25z"/>
-                  <path fill="#4CAF50" d="M12.697 28.083A11.952 11.952 0 0112 25c0-1.061.148-2.087.421-3.083H1.949A23.902 23.902 0 000 25c0 3.874.92 7.527 2.543 10.771l10.154-7.688z"/>
-                  <path fill="#1976D2" d="M24 13c3.313 0 6.326 1.243 8.59 3.267l5.657-5.657C34.046 3.042 29.268 1 24 1v12z"/>
-                </svg>
-                Google
-              </button>
-              <button type="button" className="btn btn-outline w-full h-12 justify-center">
-                <Github className="size-4" />
-                GitHub
-              </button>
-            </div>
+            
           </form>
 
           {/* Footer */}

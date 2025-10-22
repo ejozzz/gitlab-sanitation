@@ -1,10 +1,10 @@
-// src/app/api/gitlab/merge-requests/route.ts
+// src/app/api/gitlab/merge-requests/[iid]/detail/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getGitLabClientOrFail, handleApiError } from '@/lib/api-helpers';
 
 export const dynamic = 'force-dynamic';
 
-// --- helpers ----------------------------------------------------
+// --- config extractors (same as before) -----------------------
 function getDeep(o: any, path: string): any {
   return path.split('.').reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), o);
 }
@@ -29,7 +29,6 @@ function extractConfig(client: any) {
     'projectId', 'project_id', '_projectId',
     'config.projectId', 'config.project_id', 'config._projectId',
   ]);
-
   if (!host || !token || projectId == null) {
     const msg = `GitLab client missing config. host=${!!host}, token=${!!token}, projectId=${projectId}`;
     const e: any = new Error(msg);
@@ -56,62 +55,78 @@ async function gitlabGET(host: string, token: string, path: string, query: Recor
   const text = await r.text();
   const ct = r.headers.get('content-type') || '';
   if (!r.ok) {
-    return NextResponse.json({ error: `GitLab MR list failed (${r.status}): ${text.slice(0, 600)}` }, { status: r.status });
+    return NextResponse.json({ error: `GitLab MR detail failed (${r.status}): ${text.slice(0, 600)}` }, { status: r.status });
   }
   if (!ct.includes('application/json')) {
     return NextResponse.json({ error: 'Invalid content-type from GitLab (expected JSON)' }, { status: 502 });
   }
   try {
     const data = JSON.parse(text);
-    return NextResponse.json(data);
+    return data;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON from GitLab' }, { status: 502 });
   }
 }
 
-function mapQuery(url: URL) {
-  const sp = url.searchParams;
-  const page = Math.max(1, parseInt(sp.get('page') ?? '1', 10) || 1);
-  const perPage = Math.min(100, Math.max(1, parseInt(sp.get('perPage') ?? '20', 10) || 20));
-
-  // Use GitLab’s parameter names (matching your working routes)
-  const q: Record<string, string> = {
-    page: String(page),
-    per_page: String(perPage),
-    order_by: sp.get('order_by') ?? 'updated_at',
-    sort: sp.get('sort') ?? 'desc',
-    state: sp.get('state') ?? 'opened',
-  };
-
-  const target = sp.get('target_branch') || sp.get('target'); // accept both, prefer target_branch
-  const source = sp.get('source_branch') || sp.get('source');
-  if (target) q['target_branch'] = target;
-  if (source) q['source_branch'] = source;
-
-  const labels = sp.get('labels'); if (labels) q['labels'] = labels;
-  const author = sp.get('author_username') || sp.get('author'); if (author) q['author_username'] = author;
-  const assignee = sp.get('assignee_username') || sp.get('assignee'); if (assignee) q['assignee_username'] = assignee;
-  const search = sp.get('search'); if (search) q['search'] = search;
-  const updated_after = sp.get('updated_after'); if (updated_after) q['updated_after'] = updated_after;
-  const updated_before = sp.get('updated_before'); if (updated_before) q['updated_before'] = updated_before;
-
-  const draft = sp.get('draft'); // legacy WIP compatibility
-  if (draft) q['wip'] = draft === 'true' ? 'yes' : 'no';
-
-  return { page, perPage, q };
-}
-
-// --- handler ----------------------------------------------------
-export async function GET(req: NextRequest) {
+// NOTE: In Next.js 15, params is async; declare as Promise<...> and await it.
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ iid: string }> }
+) {
   try {
-    // Use your standard resolver (unchanged elsewhere)
+    const { iid: iidStr } = await ctx.params; // <-- await params
+    const iid = Number(iidStr);
+    if (!Number.isFinite(iid)) {
+      return NextResponse.json({ error: 'Invalid MR IID' }, { status: 400 });
+    }
+
     const client = await getGitLabClientOrFail(req);
     const { host, token, projectId } = extractConfig(client);
-    const { q } = mapQuery(new URL(req.url));
+    const base = `/projects/${encodeURIComponent(projectId)}/merge_requests/${iid}`;
 
-    // Call GitLab directly (no reliance on client methods)
-    const path = `/projects/${encodeURIComponent(projectId)}/merge_requests`;
-    return await gitlabGET(host, token, path, q);
+    // Parallelize subcalls
+    const [mrRes, commitsRes, approvalsRes, pipelinesRes, discussionsRes] = await Promise.all([
+      gitlabGET(host, token, `${base}`),
+      gitlabGET(host, token, `${base}/commits`, { per_page: '100' }),
+      gitlabGET(host, token, `${base}/approvals`),
+      gitlabGET(host, token, `${base}/pipelines`, { per_page: '3' }),
+      gitlabGET(host, token, `${base}/discussions`, { per_page: '100' }),
+    ]);
+
+    // If any call returned a NextResponse error, bubble it up
+    const asResp = (...xs: any[]) => xs.find((x) => x && typeof x.headers === 'object' && typeof x.json === 'function');
+    const early = asResp(mrRes, commitsRes, approvalsRes, pipelinesRes, discussionsRes);
+    if (early) return early as any;
+
+    const approvalsRaw = approvalsRes as any;
+    const discussionsRaw = discussionsRes as any;
+
+    const approvals = approvalsRaw
+      ? {
+          required: approvalsRaw?.approvals_required ?? 0,
+          approved: approvalsRaw?.approved_by?.length ?? 0,
+          remaining: Math.max(0, (approvalsRaw?.approvals_required ?? 0) - (approvalsRaw?.approved_by?.length ?? 0)),
+          approved_by: approvalsRaw?.approved_by ?? [],
+        }
+      : null;
+
+    const discussions = Array.isArray(discussionsRaw)
+      ? {
+          total: discussionsRaw.length,
+          unresolved: discussionsRaw.reduce(
+            (acc: number, d: any) => acc + (d?.notes?.some((n: any) => n?.resolvable && !n?.resolved) ? 1 : 0),
+            0
+          ),
+        }
+      : { total: 0, unresolved: 0 };
+
+    return NextResponse.json({
+      mr: mrRes,
+      commits: commitsRes,
+      approvals,
+      pipelines: Array.isArray(pipelinesRes) ? (pipelinesRes as any[]).slice(0, 3) : [],
+      discussions,
+    });
   } catch (err) {
     return handleApiError(err);
   }

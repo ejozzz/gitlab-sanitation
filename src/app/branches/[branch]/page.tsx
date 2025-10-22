@@ -268,14 +268,14 @@ export default function BranchOverviewPage() {
                   <Link
                     key={r.target}
                     href={href}
-                    className={`card shadow-sm cursor-pointer transition-colors ${merged ? 'bg-primary/90 hover:bg-primary' : 'bg-base-100 hover:bg-base-200'
+                    className={`card shadow-sm cursor-pointer transition-colors ${merged ? 'bg-base-100/90 hover:bg-base-100' : 'bg-base-100 hover:bg-base-200'
                       } border border-base-300`}
                     title={`View commit evidence on ${r.target}`}
                   >
                     <div className="card-body py-3 px-4">
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-sm break-all">{r.target}</span>
-                        <span className={`badge badge-sm ${merged ? 'badge-info' : 'badge-ghost'}`}>
+                        <span className={`badge badge-sm ${merged ? 'badge-success' : 'badge-ghost'}`}>
                           {merged ? (via === 'search' ? 'Merged (Cherry Pick)' : 'Merged') : 'Not merged'}
                         </span>
                       </div>
@@ -336,17 +336,17 @@ export default function BranchOverviewPage() {
             <div className="join bg-base-200 p-1 rounded-full">
               <button
                 type="button"
-                className={`btn btn-sm join-item rounded-full ${tab === 'commits' ? 'btn-primary' : 'btn-ghost'}`}
+                className={`btn btn-sm join-item rounded-full ${tab === 'commits' ? 'btn-base-300' : 'btn-ghost'}`}
                 onClick={() => setTab('commits')}
               >
                 Commits
               </button>
               <button
                 type="button"
-                className={`btn btn-sm join-item rounded-full ${tab === 'mrs' ? 'btn-primary' : 'btn-ghost'}`}
+                className={`btn btn-sm join-item rounded-full ${tab === 'mrs' ? 'btn-base-300' : 'btn-ghost'}`}
                 onClick={() => setTab('mrs')}
               >
-                Merge Requests <span className="badge badge-sm ml-2">{mrs.length}</span>
+                Merge Requests
               </button>
             </div>
           </div>
@@ -434,8 +434,8 @@ export default function BranchOverviewPage() {
           {!pipelines.length ? (
             <EmptyState message="No pipelines found for this branch." />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="table table-zebra">
+            <div className="overflow-x-auto rounded-box border border-base-content/5 bg-base-100">
+              <table className="table">
                 <thead>
                   <tr>
                     <th>ID</th>

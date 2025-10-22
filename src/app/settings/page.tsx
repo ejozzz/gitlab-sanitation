@@ -1,23 +1,22 @@
-// app/settings/pages.tsx
+// src/app/settings/page.tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { settingsFormSchema, type SettingsFormData } from '@/lib/config.shared';
 import { useProjectStore } from '@/lib/project-store';
 
-/* ---------- helpers ---------- */
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function validate(data: SettingsFormData): Partial<Record<keyof SettingsFormData, string>> {
   const res = settingsFormSchema.safeParse(data);
   if (res.success) return {};
   const errs: Partial<Record<keyof SettingsFormData, string>> = {};
-  for (const e of res.error.issues) {
-    const key = e.path[0] as keyof SettingsFormData;
-    if (!errs[key]) errs[key] = e.message;
+  for (const issue of res.error.issues) {
+    const path = issue.path?.[0] as keyof SettingsFormData | undefined;
+    if (path) errs[path] = issue.message;
   }
   return errs;
 }
@@ -31,7 +30,7 @@ function composeForm(fields: {
   name: string;
   hostInput: string;
   projectId: string;
-  gitlabToken: string;
+  gitlabToken: string; // may be masked sentinel
   isActive: boolean;
 }): SettingsFormData {
   return {
@@ -39,7 +38,7 @@ function composeForm(fields: {
     projectId: fields.projectId,
     gitlabToken: fields.gitlabToken,
     gitlabHost: normalizeHost(fields.hostInput),
-    isActive:fields.isActive
+    isActive: fields.isActive,
   };
 }
 
@@ -48,97 +47,138 @@ function shallowEqual(a: SettingsFormData, b: SettingsFormData) {
     a.name === b.name &&
     a.gitlabHost === b.gitlabHost &&
     String(a.projectId) === String(b.projectId) &&
-    a.gitlabToken === b.gitlabToken
+    a.gitlabToken === b.gitlabToken &&
+    !!a.isActive === !!b.isActive
   );
 }
 
-/* ---------- main component ---------- */
+// ---- Masking helpers ----
+const mask = (last4?: string | null) =>
+  last4 ? `glpat-${'•'.repeat(12)}${String(last4)}` : '';
+
+const isMasked = (value: string, last4?: string | null) =>
+  !!last4 && value === mask(last4);
+
+type ServerProject = {
+  id: string;
+  name: string;
+  gitlabHost: string;
+  projectId: string;
+  isActive: boolean;
+  hasToken?: boolean;
+  tokenLast4?: string | null;
+};
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const router = useRouter();
   const params = useSearchParams();
   const { setActiveProject } = useProjectStore();
 
-  // NEW: flag from URL to force a fresh/blank form
   const isNew = params.get('new') === '1';
 
-  /* server data (fetched once) — disabled when isNew */
-  const { data: serverSettings, isLoading: isLoadingSettings } = useQuery({
+  const { data: projects, isLoading: isLoadingSettings } = useQuery({
     queryKey: ['projects'],
-    enabled: !isNew, // <-- do not fetch when new=1
-    queryFn: async () => {
+    enabled: !isNew,
+    queryFn: async (): Promise<ServerProject[]> => {
       const res = await fetch('/api/projects', { cache: 'no-store' });
       if (!res.ok) {
-        if (res.status === 404)
-          return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
+        if (res.status === 404) return [];
         throw new Error('Failed to load settings');
       }
-      const list: any[] = await res.json();
-      const active = list.find((p) => p.isActive) ?? list[0] ?? null;
-      if (!active)
-        return { name: '', gitlabHost: '', projectId: '', gitlabToken: '', isActive: false } as SettingsFormData;
-      return {
-        userid: active.userid,
-        name: active.name,
-        gitlabHost: active.gitlabHost,
-        projectId: String(active.projectId),
-        gitlabToken: '', // never pre-fill token
-        isActive: Boolean(active.isActive),
-      } as SettingsFormData;
+      const list = (await res.json()) as any[];
+
+      return list.map((r) => ({
+        id: String(r.id ?? r._id ?? ''),
+        name: r.name ?? '',
+        gitlabHost:
+          typeof r.gitlabhost === 'string'
+            ? r.gitlabhost
+            : typeof r.gitlab_url === 'string' && r.gitlab_url.includes('/api/v4/projects/')
+            ? r.gitlab_url.split('/api/v4/projects/')[0]
+            : '',
+        projectId: String(r.projectid ?? r.projectId ?? ''),
+        isActive: !!(r.isactive ?? r.isActive),
+        hasToken: !!(r.hasToken ?? r.token ?? r.token_encrypted),
+        tokenLast4: r.tokenLast4 ?? r.token_last4 ?? null,
+      }));
     },
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
   });
 
-  /* local form state */
+  const current = useMemo(() => {
+    if (isNew) return null;
+    const list = projects ?? [];
+    return list.find((p) => p.isActive) ?? list[0] ?? null;
+  }, [projects, isNew]);
+
   const [name, setName] = useState('');
   const [hostInput, setHostInput] = useState('');
   const [projectId, setProjectId] = useState('');
-  const [gitlabToken, setGitlabToken] = useState('');
+  const [gitlabToken, setGitlabToken] = useState(''); // may hold masked sentinel
   const [isActive, setIsActive] = useState(false);
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [connStatus, setConnStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle');
+  const [connMessage, setConnMessage] = useState('');
+  const [errors, setErrors] = useState<ReturnType<typeof validate>>({});
+  const [showErrors, setShowErrors] = useState(false);
 
-  /* frozen snapshot – never changes after first load (edit mode only) */
   const serverSnapshot = useRef<SettingsFormData | null>(null);
+  const last4Ref = useRef<string | null>(null);
 
-  // HYDRATE from server once (only when not in new mode)
   useEffect(() => {
-    if (isNew) return;
-    if (!serverSettings) return;
-    if (serverSnapshot.current) return; // already hydrated
-    serverSnapshot.current = serverSettings;
-    setName(serverSettings.name || '');
-    setHostInput(serverSettings.gitlabHost || '');
-    setProjectId(String(serverSettings.projectId ?? ''));
-    setGitlabToken(serverSettings.gitlabToken || '');
-    setIsActive(serverSettings.isActive ?? false);
-  }, [serverSettings, isNew]);
+    if (isNew || !current) {
+      serverSnapshot.current = {
+        name: '',
+        gitlabHost: '',
+        projectId: '',
+        gitlabToken: '',
+        isActive: false,
+      };
+      last4Ref.current = null;
+      setName('');
+      setHostInput('');
+      setProjectId('');
+      setGitlabToken('');
+      setIsActive(false);
+      setConnStatus('idle');
+      setConnMessage('');
+      setErrors({});
+      setShowErrors(false);
+      queryClient.removeQueries({ queryKey: ['projects'] });
+      return;
+    }
 
-  // NEW: when ?new=1, force-clear the form and reset local states
-  useEffect(() => {
-    if (!isNew) return;
-    serverSnapshot.current = {
-      name: '',
-      gitlabHost: '',
-      projectId: '',
-      gitlabToken: '',
-      isActive: false,
-    }; // treat baseline as blank for dirty calc
-    setName('');
-    setHostInput('');
-    setProjectId('');
-    setGitlabToken('');
-    setIsActive(false);
-    setErrors({});
+    const snap: SettingsFormData = {
+      name: current.name,
+      gitlabHost: current.gitlabHost,
+      projectId: current.projectId,
+      gitlabToken: '', // never snapshot plaintext
+      isActive: current.isActive,
+    };
+    serverSnapshot.current = snap;
+
+    last4Ref.current = current.tokenLast4 ?? null;
+
+    setName(current.name);
+    setHostInput(current.gitlabHost.replace(/^https?:\/\//, ''));
+    setProjectId(String(current.projectId));
+    setGitlabToken(current.hasToken ? mask(current.tokenLast4) : '');
+    setIsActive(!!current.isActive);
     setConnStatus('idle');
     setConnMessage('');
+    setErrors({});
     setShowErrors(false);
-    // also clear any cached 'projects' to avoid accidental hydration
-    queryClient.removeQueries({ queryKey: ['projects'] });
-  }, [isNew, queryClient]);
+  }, [current, isNew, queryClient]);
 
   const composed = useMemo(
-    () => composeForm({ name, hostInput, projectId, gitlabToken, isActive }),
-    [name, hostInput, projectId, gitlabToken]
+    () =>
+      composeForm({
+        name,
+        hostInput,
+        projectId,
+        gitlabToken,
+        isActive,
+      }),
+    [name, hostInput, projectId, gitlabToken, isActive]
   );
 
   const dirty = useMemo(
@@ -146,62 +186,70 @@ export default function SettingsPage() {
     [composed]
   );
 
-  /* validation & UI */
-  const [errors, setErrors] = useState<ReturnType<typeof validate>>({});
-  const [showErrors, setShowErrors] = useState(false);
-  const [tokenVisible, setTokenVisible] = useState(false);
-  const [connStatus, setConnStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle');
-  const [connMessage, setConnMessage] = useState('');
-
-  /* mutations */
   const saveMutation = useMutation({
-    mutationFn: async (payload: SettingsFormData) => {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...payload,
-          // ensure required name without altering the UI
-          name: (payload.name ?? '').trim() || `project-${payload.projectId}`,
-          // be explicit; server will also enforce (see B)
-          isActive: false,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
+    mutationFn: async () => {
+      // If token input is the masked sentinel, omit it so backend keeps existing encrypted token.
+      const omitToken = isMasked(composed.gitlabToken, last4Ref.current);
+      const body: any = {
+        name: composed.name,
+        gitlabHost: composed.gitlabHost,
+        projectId: composed.projectId,
+        isActive: composed.isActive,
+      };
+      if (!omitToken && composed.gitlabToken) {
+        body.gitlabToken = composed.gitlabToken;
+      }
+
+      if (current?.id) {
+        const res = await fetch(`/api/projects/${current.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 404 || res.status === 405) {
+          const postRes = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!postRes.ok) throw new Error(await postRes.text());
+          return postRes.json();
+        }
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      } else {
+        const res = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      }
     },
-    onSuccess: async (_data) => {
-      // 1. wipe the cache first
-      // await queryClient.invalidateQueries({ queryKey: ['projects'] });
-      // 2. change route only after cache is empty
-      // setActiveProject(composed.projectId);
-      router.push('/projects');
+    onSuccess: async () => {
+      if (isActive && projectId) setActiveProject(projectId);
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      serverSnapshot.current = {
+        ...composed,
+        gitlabToken: '', // never store plaintext in snapshot
+      };
+      setShowErrors(false);
     },
   });
 
-  /* actions */
-  const testConnection = async () => {
-    const v = validate(composed);
-    if (Object.keys(v).length) {
-      setErrors(v);
-      setShowErrors(true);
-      return;
-    }
-    setShowErrors(false);
+  const onTest = async () => {
     setConnStatus('checking');
     setConnMessage('');
     try {
+      const omit = isMasked(composed.gitlabToken, last4Ref.current);
+      const tokenForTest = omit ? '' : composed.gitlabToken;
       const res = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: composed.name,
-          gitlabHost: composed.gitlabHost,
-          gitlabToken: composed.gitlabToken,
-          projectId: composed.projectId,
-        }),
+        body: JSON.stringify({ gitlabToken: tokenForTest }),
       });
-      await sleep(300);
+      await sleep(250);
       if (!res.ok) {
         const msg = (await res.text()) || 'Validation failed';
         setConnStatus('fail');
@@ -210,7 +258,7 @@ export default function SettingsPage() {
       }
       const data = await res.json();
       setConnStatus('ok');
-      setConnMessage(data?.message ?? 'GitLab credentials are valid.');
+      setConnMessage(data?.message ?? (omit ? 'Existing token kept.' : 'Token looks good.'));
     } catch {
       setConnStatus('fail');
       setConnMessage('Network error. Please try again.');
@@ -218,58 +266,29 @@ export default function SettingsPage() {
   };
 
   const onSave = () => {
-    const v = validate(composed);
+    const v = validate({
+      ...composed,
+      // If masked, treat as empty for validation (we keep old token).
+      gitlabToken: isMasked(composed.gitlabToken, last4Ref.current) ? '' : composed.gitlabToken,
+    });
+    setErrors(v);
     if (Object.keys(v).length) {
-      setErrors(v);
       setShowErrors(true);
       return;
     }
-    setShowErrors(false);
-    saveMutation.mutate(composed);
+    saveMutation.mutate();
   };
 
-  const onReset = () => {
-    if (isNew) {
-      // In NEW mode, reset to an empty form
-      setName('');
-      setHostInput('');
-      setProjectId('');
-      setGitlabToken('');
-      setIsActive(false);
-    } else if (serverSnapshot.current) {
-      // In EDIT mode, restore from server snapshot
-      setName(serverSnapshot.current.name || '');
-      setHostInput(serverSnapshot.current.gitlabHost || ''); // keep protocol
-      setProjectId(String(serverSnapshot.current.projectId ?? ''));
-      setGitlabToken(serverSnapshot.current.gitlabToken || '');
-      setIsActive(serverSnapshot.current.isActive ?? false);
-    }
-    setErrors({});
-    setConnStatus('idle');
-    setConnMessage('');
-    setShowErrors(false);
-  };
-
-  /* derived flags */
-  const saveDisabled = !dirty || saveMutation.isPending;
-
-  /* sticky bar visibility */
   const [showDirtyBar, setShowDirtyBar] = useState(false);
   useEffect(() => {
-    const requiredFilled =
-      name.trim() !== '' &&
-      hostInput.trim() !== '' &&
-      projectId.trim() !== '' &&
-      gitlabToken.trim() !== '';
-    if (!requiredFilled || saveMutation.isPending) {
+    if (!dirty || saveMutation.isPending) {
       setShowDirtyBar(false);
       return;
     }
-    const t = setTimeout(() => setShowDirtyBar(true), 10_0000);
+    const t = setTimeout(() => setShowDirtyBar(true), 1200);
     return () => clearTimeout(t);
-  }, [name, hostInput, projectId, gitlabToken, saveMutation.isPending]);
+  }, [dirty, saveMutation.isPending]);
 
-  /* ---------- render ---------- */
   return (
     <div className="min-h-[calc(100vh-4rem)]">
       <section className="relative overflow-hidden">
@@ -297,26 +316,28 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div className="rounded-2xl border border-base-300/70 shadow-sm bg-base-100/80 backdrop-blur">
-          <div className="p-6 border-b border-base-300/70 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold">General</h2>
-              <p className="text-sm text-base-content/70">Your app identifies the active project using these details.</p>
-            </div>
-
-            <div className="flex items-center gap-2">
+        <div className="rounded-2xl border border-base-300/70 bg-base-100/80 shadow-sm">
+          <div className="border-b border-base-300/70 px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
               <StatusPill status={connStatus} />
+              <span className="text-sm opacity-70">
+                {isNew ? 'Creating new project settings' : current ? `Editing: ${current.name}` : 'No project found'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
               <button
-                onClick={testConnection}
-                disabled={connStatus === 'checking' || isLoadingSettings}
-                className={clsx('btn btn-outline btn-sm h-10', connStatus === 'checking' && 'btn-disabled')}
+                type="button"
+                className={clsx('btn btn-outline btn-sm', saveMutation.isPending && 'btn-disabled')}
+                onClick={onTest}
+                disabled={saveMutation.isPending}
+                title="If the token is masked, we keep the existing token."
               >
-                {connStatus === 'checking' ? <span className="loading loading-spinner" /> : 'Test Connection'}
+                Test Connection
               </button>
               <button
+                type="button"
+                className={clsx('btn btn-primary btn-sm', saveMutation.isPending && 'btn-disabled')}
                 onClick={onSave}
-                disabled={saveDisabled}
-                className={clsx('btn btn-primary btn-sm h-10', saveDisabled && 'btn-disabled')}
               >
                 {saveMutation.isPending ? (
                   <>
@@ -341,7 +362,7 @@ export default function SettingsPage() {
                       className="input input-bordered w-full h-12"
                       placeholder="e.g., GitLab — Internal"
                       value={name}
-                      onChange={e => setName(e.target.value)}
+                      onChange={(e) => setName(e.target.value)}
                     />
                   </Field>
 
@@ -350,9 +371,9 @@ export default function SettingsPage() {
                       <span className="join-item btn no-animation pointer-events-none h-12">https://</span>
                       <input
                         className="input input-bordered join-item w-full h-12"
-                        placeholder="gitlab.company.com"
+                        placeholder="gitlab.example.com"
                         value={hostInput}
-                        onChange={e => setHostInput(e.target.value)}
+                        onChange={(e) => setHostInput(e.target.value)}
                       />
                     </div>
                   </Field>
@@ -360,9 +381,9 @@ export default function SettingsPage() {
                   <Field label="Project ID" error={showErrors ? errors.projectId : undefined}>
                     <input
                       className="input input-bordered w-full h-12"
-                      placeholder="e.g., 12345 or group/project"
+                      placeholder="e.g., 12345"
                       value={projectId}
-                      onChange={e => setProjectId(e.target.value)}
+                      onChange={(e) => setProjectId(e.target.value)}
                     />
                   </Field>
 
@@ -373,20 +394,28 @@ export default function SettingsPage() {
                         type={tokenVisible ? 'text' : 'password'}
                         placeholder="glpat-****************"
                         value={gitlabToken}
-                        onChange={e => setGitlabToken(e.target.value)}
+                        onChange={(e) => setGitlabToken(e.target.value)}
                       />
                       <button
                         type="button"
                         className="join-item btn h-12"
-                        onMouseDown={e => e.preventDefault()}
-                        onClick={() => setTokenVisible(s => !s)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => setTokenVisible((s) => !s)}
+                        title="Toggle visibility of the current input (masked by default)."
                       >
                         {tokenVisible ? 'Hide' : 'Show'}
                       </button>
                     </div>
+                    {last4Ref.current ? (
+                      <p className="text-xs opacity-70 mt-1">
+                        Stored token present • ending with <b>{last4Ref.current}</b>. Leave as is to keep it, or paste a new token to replace.
+                      </p>
+                    ) : (
+                      <p className="text-xs opacity-70 mt-1">No token stored yet.</p>
+                    )}
                   </Field>
 
-                  <Field label="Is Active" error={showErrors ? errors.isActive : undefined}>
+                  <Field label="Is Active">
                     <input
                       type="checkbox"
                       className="toggle toggle-primary"
@@ -396,39 +425,35 @@ export default function SettingsPage() {
                   </Field>
                 </div>
 
-                <div className="lg:col-span-5 space-y-6">
+                <div className="lg:col-span-5 space-y-4">
                   <div className="rounded-xl border border-base-300/70 p-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="font-medium">Connection</h3>
+                      <h3 className="font-medium">Connection Status</h3>
                       <StatusPill status={connStatus} />
                     </div>
-                    <div className="mt-3 text-sm">
-                      {connStatus === 'idle' && (
-                        <p className="text-base-content/70">
-                          Click <span className="kbd kbd-sm">Test Connection</span> to verify host, token, and project.
-                        </p>
-                      )}
+                    <div className="mt-2 min-h-6">
                       {connStatus === 'checking' && (
-                        <div className="flex items-center gap-2">
-                          <span className="loading loading-spinner" />
+                        <div className="flex items-center gap-2 text-sm opacity-70">
+                          <span className="loading loading-spinner loading-sm" />
                           <span>Contacting GitLab…</span>
                         </div>
                       )}
                       {connStatus === 'ok' && <p className="text-success">{connMessage || 'All good!'}</p>}
-                      {connStatus === 'fail' && <p className="text-error">{connMessage || 'Could not validate credentials.'}</p>}
+                      {connStatus === 'fail' && (
+                        <p className="text-error">{connMessage || 'Could not validate credentials.'}</p>
+                      )}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-base-300/70 p-4 bg-base-200/50">
                     <h3 className="font-medium">How to create a GitLab Personal Access Token</h3>
                     <ol className="mt-2 text-sm list-decimal list-inside space-y-2">
-                      <li>Sign in to GitLab (your instance).</li>
+                      <li>Sign in to your GitLab instance.</li>
                       <li>Open <b>User menu → Preferences</b>.</li>
                       <li>Go to <b>Access Tokens</b>.</li>
                       <li>Name it (e.g. “Sanitation App”), optional expiry.</li>
-                      <li>Select scope <code className="kbd kbd-sm">api</code> (write not required).</li>
-                      <li>Create the token, copy the value starting with <code>glpat-</code>.</li>
-                      <li>Paste it in the field on the left.</li>
+                      <li>Select scope <code className="kbd kbd-sm">api</code>.</li>
+                      <li>Create the token and paste it here.</li>
                     </ol>
                   </div>
                 </div>
@@ -438,33 +463,34 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Sticky Action Bar */}
       <div className={clsx('fixed inset-x-0 bottom-0 transition-all', showDirtyBar ? 'translate-y-0' : 'translate-y-full')}>
         <div className="container mx-auto px-4 pb-4">
-          <div className="rounded-2xl shadow-lg border border-base-300/70 bg-base-100/95 backdrop-blur p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div className="text-sm">
-              <span className="font-medium">Unsaved changes</span>
-              <span className="text-base-content/70"> — Don’t forget to save your updates.</span>
-            </div>
-            <div className="flex gap-2">
-              <button type="button" className="btn btn-ghost" onClick={onReset} disabled={saveMutation.isPending || isLoadingSettings}>
-                Reset
-              </button>
-              <button
-                type="button"
-                className={clsx('btn btn-primary', saveDisabled && 'btn-disabled')}
-                onClick={onSave}
-                disabled={saveDisabled}
-              >
-                {saveMutation.isPending ? (
-                  <>
-                    <span className="loading loading-spinner" />
-                    Saving…
-                  </>
-                ) : (
-                  'Save Changes'
-                )}
-              </button>
+          <div className="mx-auto max-w-3xl rounded-2xl shadow-lg bg-base-100 border border-base-300/70">
+            <div className="px-6 py-3 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="badge badge-warning">Unsaved</span>
+                <span className="opacity-70">You have unsaved changes.</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    const snap = serverSnapshot.current;
+                    if (!snap) return;
+                    setName(snap.name);
+                    setHostInput(snap.gitlabHost.replace(/^https?:\/\//, ''));
+                    setProjectId(String(snap.projectId));
+                    setGitlabToken(last4Ref.current ? mask(last4Ref.current) : '');
+                    setIsActive(!!snap.isActive);
+                  }}
+                >
+                  Discard
+                </button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={onSave}>
+                  Save changes
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -473,7 +499,6 @@ export default function SettingsPage() {
   );
 }
 
-/* ---------- small components ---------- */
 function StatusPill({ status }: { status: 'idle' | 'checking' | 'ok' | 'fail' }) {
   const map = {
     idle: { text: 'Not checked', cls: 'badge-ghost' },
