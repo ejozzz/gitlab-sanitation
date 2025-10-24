@@ -28,7 +28,7 @@ export const settingsFormSchema = z.object({
   name: z.string().min(1, "Project name is required"),
   gitlabHost: z.string().url(),
   projectId: z.union([z.string()]),
-  gitlabToken: z.string().min(1, "Token is required"),
+  gitlabToken: z.string().optional().default(""),
   isActive:z.boolean().default(false)
 });
 

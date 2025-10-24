@@ -35,3 +35,4 @@ export function decryptToken(ciphertext: string, nonce: string, tag: string) {
   ]);
   return dec.toString("utf8");
 }
+

@@ -110,7 +110,8 @@ export async function POST(req: NextRequest) {
       name,
       gitlab_url,
       projectId,
-      token,              // { ciphertext, nonce, tag }
+      token,                           // { ciphertext, nonce, tag }
+      token_last4: gitlabToken.slice(-4), // NEW: for UI masking
       isActive: !!isActive,
       created_at: now,
       updated_at: now,

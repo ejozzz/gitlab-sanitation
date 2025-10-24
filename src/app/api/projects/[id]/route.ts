@@ -32,6 +32,9 @@ export async function GET(
     createdAt: doc.created_at,
     updatedAt: doc.updated_at,
     isActive: !!doc.isActive,
+    // NEW
+    hasToken: !!doc.token,
+    tokenLast4: doc.token_last4 ?? null,
   };
 
   return NextResponse.json(item);
@@ -73,7 +76,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (gitlabToken) {
     const token = await encryptToken(gitlabToken);
-    update.token = token;
+    update.token = token;                      // encrypted blob
+    update.token_last4 = gitlabToken.slice(-4); // NEW: for UI masking
   }
 
   if (isActive) {

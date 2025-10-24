@@ -94,8 +94,8 @@ export default function SettingsPage() {
           typeof r.gitlabhost === 'string'
             ? r.gitlabhost
             : typeof r.gitlab_url === 'string' && r.gitlab_url.includes('/api/v4/projects/')
-            ? r.gitlab_url.split('/api/v4/projects/')[0]
-            : '',
+              ? r.gitlab_url.split('/api/v4/projects/')[0]
+              : '',
         projectId: String(r.projectid ?? r.projectId ?? ''),
         isActive: !!(r.isactive ?? r.isActive),
         hasToken: !!(r.hasToken ?? r.token ?? r.token_encrypted),
@@ -230,40 +230,65 @@ export default function SettingsPage() {
     onSuccess: async () => {
       if (isActive && projectId) setActiveProject(projectId);
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
-      serverSnapshot.current = {
-        ...composed,
-        gitlabToken: '', // never store plaintext in snapshot
-      };
+
+      // If the user kept the masked token, snapshot must keep the masked value too.
+      const keptMasked = isMasked(composed.gitlabToken, last4Ref.current);
+
+      if (keptMasked) {
+        serverSnapshot.current = { ...composed }; // masked sentinel is safe to keep
+      } else if (composed.gitlabToken) {
+        // User entered a NEW token: update last4, re-mask the input, and snapshot the masked value
+        const newLast4 = composed.gitlabToken.slice(-4);
+        last4Ref.current = newLast4;
+        const masked = mask(newLast4);
+        setGitlabToken(masked);
+        serverSnapshot.current = { ...composed, gitlabToken: masked };
+      } else {
+        // No token in form (empty), just snapshot as-is
+        serverSnapshot.current = { ...composed };
+      }
+
       setShowErrors(false);
+      setShowDirtyBar(false); // hide the bar immediately after save
     },
+
   });
 
   const onTest = async () => {
     setConnStatus('checking');
     setConnMessage('');
     try {
-      const omit = isMasked(composed.gitlabToken, last4Ref.current);
-      const tokenForTest = omit ? '' : composed.gitlabToken;
+      // If user didn't change the field (masked/empty), we let backend use DB token.
+      const tokenInput = gitlabToken?.trim();
+      const maybeMasked = tokenInput?.startsWith('glpat-') && tokenInput.includes('•');
+
+      const payload: any = {
+        projectId: String(projectId || ''), // helps backend pick the right project
+      };
+      if (tokenInput && !maybeMasked) {
+        payload.gitlabToken = tokenInput; // user typed a new token
+      }
+
       const res = await fetch('/api/projects/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gitlabToken: tokenForTest }),
+        body: JSON.stringify(payload),
       });
-      await sleep(250);
-      if (!res.ok) {
-        const msg = (await res.text()) || 'Validation failed';
+
+      const data = await res.json().catch(() => ({}));
+      if (data?.ok) {
+        setConnStatus('ok');
+        setConnMessage(data?.message ?? 'Token works for this project.');
+      } else {
         setConnStatus('fail');
-        setConnMessage(msg);
-        return;
+        setConnMessage(JSON.stringify(data ?? { ok: false, error: 'Unknown error' }));
       }
-      const data = await res.json();
-      setConnStatus('ok');
-      setConnMessage(data?.message ?? (omit ? 'Existing token kept.' : 'Token looks good.'));
     } catch {
       setConnStatus('fail');
       setConnMessage('Network error. Please try again.');
     }
   };
+
 
   const onSave = () => {
     const v = validate({
@@ -273,6 +298,11 @@ export default function SettingsPage() {
     });
     setErrors(v);
     if (Object.keys(v).length) {
+      setShowErrors(true);
+      return;
+    }
+    if (isNew && !gitlabToken.trim()) {
+      setErrors((e) => ({ ...e, gitlabToken: "Token is required for new project" }));
       setShowErrors(true);
       return;
     }
@@ -406,14 +436,17 @@ export default function SettingsPage() {
                         {tokenVisible ? 'Hide' : 'Show'}
                       </button>
                     </div>
-                    {last4Ref.current ? (
+
+                    {/* ▼ NEW: status line under the input */}
+                    {last4Ref?.current ? (
                       <p className="text-xs opacity-70 mt-1">
-                        Stored token present • ending with <b>{last4Ref.current}</b>. Leave as is to keep it, or paste a new token to replace.
+                        Stored token present • ending with <b>{last4Ref.current}</b>. Leave masked to keep it, or paste a new token to replace.
                       </p>
                     ) : (
                       <p className="text-xs opacity-70 mt-1">No token stored yet.</p>
                     )}
                   </Field>
+
 
                   <Field label="Is Active">
                     <input
